@@ -40,7 +40,12 @@ struct AppEntry: App {
     }
     #endif
 
-    private static let appGroup = "group.com.void.smarttube"
+    private static let appGroup: String = {
+        guard let identifier = Bundle.main.object(forInfoDictionaryKey: "SmartTubeAppGroupIdentifier") as? String else {
+            preconditionFailure("SmartTubeAppGroupIdentifier is missing from the app Info.plist")
+        }
+        return identifier
+    }()
     private static let pendingKey = "pendingVideoID"
     private static let pendingWatchLaterKey = "pendingWatchLaterVideoID"
     private static let pendingQueueKey = "pendingQueueVideoID"
@@ -56,7 +61,7 @@ struct AppEntry: App {
         // "default app not configured" error.
         let settingsStore = SettingsStore()
         CrashlyticsLogger.isEnabled = !settingsStore.settings.disableAnalytics
-        if CrashlyticsLogger.isEnabled {
+        if CrashlyticsLogger.isEnabled, Self.hasValidFirebaseConfiguration {
             FirebaseApp.configure()
         }
         let poTokenProvider: (any PoTokenProvider)? = {
@@ -95,6 +100,21 @@ struct AppEntry: App {
                 StreamMethodProbeSupport.forcedStreamMethod = method
             }
         }
+    }
+
+    private static var hasValidFirebaseConfiguration: Bool {
+        guard
+            let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist"),
+            let values = NSDictionary(contentsOfFile: path) as? [String: Any],
+            let appID = values["GOOGLE_APP_ID"] as? String,
+            let bundleID = values["BUNDLE_ID"] as? String,
+            let bundleIdentifier = Bundle.main.bundleIdentifier,
+            bundleID == bundleIdentifier,
+            appID.range(of: #"^\d+:\d+:ios:[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
+        else {
+            return false
+        }
+        return true
     }
 
     /// When launched with `--uitesting-shorts` the app skips the full navigation

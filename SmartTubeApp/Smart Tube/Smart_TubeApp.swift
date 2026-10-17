@@ -26,7 +26,7 @@ struct SmartTubeTVApp: App {
         // must exist before deciding whether to configure Firebase at all.
         let settingsStore = SettingsStore()
         CrashlyticsLogger.isEnabled = !settingsStore.settings.disableAnalytics
-        if CrashlyticsLogger.isEnabled {
+        if CrashlyticsLogger.isEnabled, Self.hasValidFirebaseConfiguration {
             FirebaseApp.configure()
         }
         let poTokenProvider: (any PoTokenProvider)? = {
@@ -41,6 +41,21 @@ struct SmartTubeTVApp: App {
         _browseViewModel = State(initialValue: BrowseViewModel(api: api))
         _settingsStore = State(initialValue: settingsStore)
         _cardDownloadService = State(initialValue: VideoDownloadService(api: api))
+    }
+
+    private static var hasValidFirebaseConfiguration: Bool {
+        guard
+            let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist"),
+            let values = NSDictionary(contentsOfFile: path) as? [String: Any],
+            let appID = values["GOOGLE_APP_ID"] as? String,
+            let bundleID = values["BUNDLE_ID"] as? String,
+            let bundleIdentifier = Bundle.main.bundleIdentifier,
+            bundleID == bundleIdentifier,
+            appID.range(of: #"^\d+:\d+:ios:[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
+        else {
+            return false
+        }
+        return true
     }
 
     var body: some Scene {

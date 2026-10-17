@@ -1,6 +1,6 @@
 # SmartTube
 
-A native Swift/SwiftUI YouTube client for **iPhone**, **iPad**, **macOS**, and **Apple TV**.  
+A native Swift/SwiftUI YouTube client for **iPhone**, **iPad**, **macOS**, and **Apple TV**.
 Zero ads. SponsorBlock auto-skip. DeArrow community titles. Google sign-in. Up to 8K.
 
 [![iOS 17+](https://img.shields.io/badge/iOS-17%2B-black?logo=apple)](https://apps.apple.com/us/app/smart-tube-bdp/id6761388918) [![tvOS 17+](https://img.shields.io/badge/tvOS-17%2B-black?logo=apple)](https://apps.apple.com/us/app/smart-tube-bdp/id6761388918) [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](https://apps.apple.com/us/app/smart-tube-bdp/id6761388918) [![Swift 6.0](https://img.shields.io/badge/Swift-6.0-orange?logo=swift)](https://swift.org) [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/milikadelic)
@@ -102,22 +102,20 @@ open SmartTube.xcworkspace
 
 ### Signing
 
-The project requires an Apple Developer Team ID and a Firebase `GoogleService-Info.plist` to build.  
-Copy `SmartTubeApp/Config/Secrets.xcconfig.example` to `SmartTubeApp/Config/Secrets.xcconfig` and fill in your Team ID:
+Simulator builds do not require local signing configuration. Shared Xcode settings default to Team ID `5A4JA438MW` and bundle prefix `com.void`; device signing requires access to the matching Apple Developer team and provisioning profiles.
 
-```
-DEVELOPMENT_TEAM = YOUR_TEAM_ID
-SMARTTUBE_TV_TEAM = YOUR_TEAM_ID
-```
+To override signing or bundle identifiers locally, copy `SmartTubeApp/Config/Secrets.xcconfig.example` to `SmartTubeApp/Config/Secrets.xcconfig` and uncomment the settings you need. The bundle prefix also determines the App Group and ubiquity container identifiers, which must be registered for signed builds.
 
-Add your own `GoogleService-Info.plist` to both `SmartTubeApp/SmartTubeApp/` (iOS) and `SmartTubeApp/Smart Tube/` (tvOS) (create a free Firebase project at [console.firebase.google.com](https://console.firebase.google.com) — only Analytics and Crashlytics are used).  
-All of these files are gitignored (via glob rules matching any `GoogleService-Info.plist` or `Secrets.xcconfig`) and will never be committed; `setup.sh` installs them for you if you have access to the private config repo.
+For SweetPad, copy `.vscode/settings.example.json` to `.vscode/settings.json`. SweetPad passes its explicit team and bundle-prefix overrides through `sweetpad.build.args`. The `just` recipes remain unchanged and use the shared Xcode settings plus any local `Secrets.xcconfig` overrides.
+
+Add your own `GoogleService-Info.plist` to both `SmartTubeApp/SmartTubeApp/` (iOS) and `SmartTubeApp/Smart Tube/` (tvOS) (create a free Firebase project at [console.firebase.google.com](https://console.firebase.google.com) — only Analytics and Crashlytics are used).
+The local settings and signing files are gitignored (via glob rules matching `.vscode/settings.json`, any `GoogleService-Info.plist` or `Secrets.xcconfig`) and will never be committed; `setup.sh` installs private config files if you have access to the private config repo.
 
 ---
 
 ## Contributing
 
-Pull requests are welcome. See [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) for the checklist.  
+Pull requests are welcome. See [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) for the checklist.
 Please ensure `Secrets.xcconfig` and `GoogleService-Info.plist` are **never** included in a PR.
 
 ---

@@ -20,7 +20,7 @@ private func makeNonisolatedArtworkProvider(image: UIImage) -> (CGSize) -> UIIma
 // screen widget showed stale info from a previous AVPlayer session, with
 // non-functional controls. This gives TOS player correct metadata and working
 // play/pause/skip/seek/next/previous while the app is foregrounded or
-// minimized to TOSMiniPlayerView. It does NOT add background audio or system
+// minimized to TOSFloatingPlayerView. It does NOT add background audio or system
 // PiP — both were investigated and found not feasible without a hybrid
 // AVPlayer-handoff approach the user explicitly rejected (see task-283).
 
