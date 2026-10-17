@@ -39,7 +39,11 @@ public struct RootView: View {
             #endif
         }
         .environment(\.isLandscapeLayout, isLandscapeLayout)
-        .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { isLandscapeLayout = $0 }
+        .onGeometryChange(for: Bool.self) {
+            $0.size.width > $0.size.height
+        } action: {
+            isLandscapeLayout = $0
+        }
         .tint(store.settings.accentColor.color)
         .preferredColorScheme(store.settings.themeName.colorScheme)
         #if !os(tvOS)
@@ -240,15 +244,13 @@ struct MainTabView: View {
                 .animation(.easeInOut(duration: 0.2), value: playerState.presentation)
             }
         }
-        // TOS floating corner window (bottom-right, above the tab bar). Only one
+        // TOS floating corner window (snaps to any corner, drag to move). Only one
         // mini-player can be active at a time — AVPlayer and TOS are mutually
         // exclusive (onChange stops the other before starting the new one).
-        .overlay(alignment: .bottomTrailing) {
+        .overlay {
             if tosState.presentation == .miniPlayer {
-                TOSFloatingPlayerView()
-                .padding(.trailing, 12)
-                .padding(.bottom, tabBarBottomInset + 12)
-                .transition(.scale.combined(with: .opacity))
+                TOSFloatingPlayerView(bottomBarInset: tabBarBottomInset)
+                .transition(.opacity)
                 .animation(.easeInOut(duration: 0.2), value: tosState.presentation)
             }
         }

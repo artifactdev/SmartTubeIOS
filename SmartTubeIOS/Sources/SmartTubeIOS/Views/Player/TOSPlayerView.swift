@@ -111,6 +111,21 @@ public struct TOSPlayerView: View {
         }
     }
 
+    private func hideControls() {
+        controlsHideTask?.cancel()
+        controlsHideTask = nil
+        withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
+    }
+
+    /// Toggles SmartTube's overlay cluster — driven by taps on the video body. A tap
+    /// in the bottom control-bar strip (where YouTube's own play button / scrubber
+    /// live) is ignored while the overlay is visible, so using YouTube's controls
+    /// never dismisses SmartTube's overlay. YouTube's own control bar is left entirely
+    /// to YouTube — it shows on tap and auto-hides on its own.
+    private func toggleControls() {
+        if controlsVisible { hideControls() } else { showControls() }
+    }
+
     // MARK: - Brightness/volume gesture (#19)
     //
     // Left half of the screen adjusts brightness (UIScreen.main.brightness — a
@@ -278,15 +293,24 @@ public struct TOSPlayerView: View {
                     TOSSwipeNavigationOverlay(
                         onSwipeLeft: { vm.playNext() },
                         onSwipeRight: { vm.playPrevious() },
-                        onTap: { _ in
-                            // #111 history: we tried to undo YouTube's tap-to-pause so that
-                            // tapping to reveal controls wouldn't also pause playback. But the
-                            // undo misfired on the user's first *intentional* pause (controls
-                            // were hidden, user tapped to both show controls and pause — our
-                            // code saw controlsWereVisible=false and undid it). Letting
-                            // YouTube's native tap = toggle-play/pause stand is the correct
-                            // behaviour: it matches YouTube's own app and is what users expect.
-                            showControls()
+                        onTap: { point in
+                            // Drive SmartTube's overlay toggle from this native UIKit
+                            // tap. The tap recognizer is attached to the window with
+                            // cancelsTouchesInView=false, so it fires alongside — not
+                            // instead of — YouTube's own touch handling, and YouTube's
+                            // native control bar (show on tap, auto-hide) is left
+                            // untouched.
+                            //
+                            // Ignore taps in the bottom strip where YouTube's control
+                            // bar lives (its own play/pause button, scrubber, settings)
+                            // so using those controls never dismisses SmartTube's overlay.
+                            // Only while the overlay is already visible — a tap anywhere
+                            // (including the bottom strip) still reveals it when hidden.
+                            // `point` is in window coordinates and `geo.size` is the
+                            // full-bleed player size, so the comparison is orientation-safe.
+                            let height = geo.size.height
+                            if controlsVisible, height > 0, point.y >= height * 0.85 { return }
+                            toggleControls()
                         },
                         onVerticalDragChanged: { isLeftHalf, translationY, viewHeight in
                             handleVerticalDrag(
@@ -296,10 +320,12 @@ public struct TOSPlayerView: View {
                             endVerticalDrag()
                         },
                         onEdgeSwipeExit: {
-                            // #328: distinct from the back button's minimize() — this
-                            // matches the mini-player's ✕ (tosState.stop()), fully
-                            // ending playback rather than continuing it in the background.
-                            tosState.stop()
+                            // #328: a left-edge rightward swipe mirrors iOS's
+                            // edge-swipe-back affordance, so it does what the back
+                            // button does — minimize() to the floating mini-player
+                            // with audio still playing (rather than stop(), which
+                            // fully ends playback).
+                            tosState.minimize()
                         },
                         verticalAdjustmentEnabled: store.settings.swipeBrightnessVolumeEnabled,
                         onSwipeDown: {
@@ -472,10 +498,17 @@ public struct TOSPlayerView: View {
                 dismiss()
             }
             #endif
-            // Restore saved watch position asynchronously.
+            // Restore saved watch position asynchronously — ONCE per view model.
             // We seek once the player reports .playing or .paused (i.e. after onReady fires)
             // so the IFrame API is ready to accept seekTo() calls.
+            //
+            // The vm survives minimize→expand (TOSPlayerStateStore owns it), but this
+            // view is re-created — and `.task` re-runs — on every re-present. Without the
+            // one-shot guard, expanding re-seeks to the last periodic watch-history
+            // checkpoint and rewinds an already-playing video.
             .task {
+                guard !vm.hasRestoredInitialPosition else { return }
+                vm.hasRestoredInitialPosition = true
                 let saved = await VideoStateStore.shared.state(for: video.id)?.position ?? 0
                 guard saved > 1 else { return }
                 // Poll briefly for player readiness before seeking.

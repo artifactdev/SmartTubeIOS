@@ -216,6 +216,12 @@ final class TOSPlayerViewModel: NSObject {
     var hasReceivedTimeAdvanced = false
     /// Prevents loadEmbed from firing in instances SwiftUI creates-then-discards during init.
     private var hasStartedLoading = false
+    /// True once TOSPlayerView's restore-position `.task` has run for this view model.
+    /// The vm outlives the view across minimize→expand (TOSPlayerStateStore keeps it
+    /// alive), and TOSPlayerView is re-created — and its `.task` re-runs — on every
+    /// re-present. Without this one-shot guard, expanding re-seeks to the last periodic
+    /// watch-history checkpoint and visibly rewinds the video that was already playing.
+    var hasRestoredInitialPosition = false
     /// Stored handle for the in-flight fetchSponsorSegments Task. Cancelled on full dismiss
     /// to prevent a late @Observable mutation after TOSPlayerView teardown.
     var sponsorTask: Task<Void, Never>?
@@ -327,6 +333,33 @@ final class TOSPlayerViewModel: NSObject {
             in: .page
         )
         contentController.addUserScript(detectionScript)
+
+        #if os(iOS)
+        // iOS-only mini-player chrome helper (see iosMiniChromeJS). Installs
+        // window.__stMiniChrome(), used to hide YouTube's in-page chrome while the
+        // player is minimized to the floating corner window. SmartTube deliberately
+        // does NOT touch YouTube's control bar in full-screen: YouTube's own tap
+        // handling shows/hides it (and auto-hides it), and both suppressing that tap
+        // and CSS-hiding the bar left it stuck hidden with no way to bring it back.
+        let miniChromeScript = WKUserScript(
+            source: Self.iosMiniChromeJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: false,
+            in: .page
+        )
+        contentController.addUserScript(miniChromeScript)
+
+        // iOS-only tap-to-show-controls helper (see iosTapNoPauseJS). Lets YouTube's
+        // own tap reveal its control bar, but immediately resumes the video so a
+        // tap on the video body never leaves playback paused.
+        let tapNoPauseScript = WKUserScript(
+            source: Self.iosTapNoPauseJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: false,
+            in: .page
+        )
+        contentController.addUserScript(tapNoPauseScript)
+        #endif
 
         config.userContentController = contentController
 
@@ -569,6 +602,19 @@ final class TOSPlayerViewModel: NSObject {
             "(function(){var v=document.querySelector('video');var ifr=document.querySelectorAll('iframe').length;if(v){v.playbackRate=\(rate);}return {found: !!v, iframes: ifr, playbackRate: v ? v.playbackRate : null};})();"
         )
     }
+
+    #if os(iOS)
+    /// Hides (`hidden == true`) or restores YouTube's in-page chrome — title bar,
+    /// control bar, big centre play button, paused/related overlay, end-screen cards
+    /// — while the player is minimized to the floating corner window, so only the
+    /// video shows. The CSS rules live in the injected `iosMiniChromeJS`.
+    func setMiniPlayerChrome(hidden: Bool) {
+        eval(
+            "setMiniPlayerChrome(\(hidden))",
+            "(function(){ if (window.__stMiniChrome) { window.__stMiniChrome(\(hidden)); } })();"
+        )
+    }
+    #endif
 
     // MARK: - Private helpers
 
@@ -964,6 +1010,115 @@ final class TOSPlayerViewModel: NSObject {
             }
 
             setInterval(pollVideo, 250);
+        })();
+        """
+
+    // MARK: - iOS mini-player chrome
+    //
+    // A single injected helper — `window.__stMiniChrome(hidden)` — that hides
+    // YouTube's in-page chrome (title bar, control bar, big play button, paused/
+    // related overlay, end-screen cards) while the player is minimized to the
+    // floating corner window, so only the video shows.
+    //
+    // NOTE: SmartTube formerly forced/hid YouTube's full-screen control bar via CSS,
+    // but that left the bar stuck hidden — YouTube's own state never received the
+    // "show" signal, so clearing the CSS didn't bring it back. YouTube's own tap
+    // handling (show on tap, auto-hide on inactivity) is therefore left fully intact;
+    // see iosTapNoPauseJS for how the tap's *pause* side-effect is neutralised instead.
+    //
+    // Injected with forMainFrameOnly: false, so it also runs in the non-player
+    // wrapper frame — the handler no-ops there because there is no #movie_player.
+    private static let iosMiniChromeJS: String = """
+        (function() {
+            function ensureStyle(id) {
+                var el = document.getElementById(id);
+                if (!el) {
+                    el = document.createElement('style');
+                    el.id = id;
+                    (document.head || document.documentElement).appendChild(el);
+                }
+                return el;
+            }
+
+            window.__stMiniChrome = function(hidden) {
+                ensureStyle('st-mini-chrome-style').textContent = hidden
+                    ? '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,' +
+                      '.ytp-large-play-button,.ytp-pause-overlay,.ytp-ce-element,.ytp-endscreen-content,' +
+                      '.ytp-endscreen-paginate,.ytp-cards-teaser,.ytp-cards-button,' +
+                      '.ytp-paid-content-overlay,.ytp-ad-overlay-container,.ytp-ad-player-overlay,' +
+                      '.ytp-ad-player-overlay-layout,.ytp-ad-text-overlay,.ytp-ad-image-overlay,' +
+                      '.ytp-ad-module,.ytp-featured-product,.ytp-suggested-action,.ytp-shopping-button,' +
+                      '.ytp-ce-covering-overlay,.ytp-ce-video,.ytp-ce-playlist' +
+                      '{display:none!important;visibility:hidden!important;}'
+                    : '';
+            };
+        })();
+        """
+
+    // MARK: - iOS tap-to-show-controls without pausing
+    //
+    // In the embedded player a tap on the video surface does double duty: it
+    // reveals YouTube's own controls AND toggles play/pause. Users found "tapping
+    // to see the controls pauses the video" surprising (YouTube's native app
+    // separates the two). Rather than suppressing YouTube's tap — which the
+    // previous CSS attempt showed breaks its control-bar state machine — we let
+    // the tap through so YouTube shows its bar, then immediately undo only its
+    // pause side-effect by resuming inside the `pause` event handler.
+    //
+    // Scope is limited to taps that are NOT on YouTube's own chrome: a tap on the
+    // control bar (play/pause button, scrubber, settings) is a deliberate pause/play
+    // and is left alone. `noPauseUntil` is armed on touch-down in the video area and
+    // consumed by the next `pause` event.
+    //
+    // Injected with forMainFrameOnly: false; the wrapper frame simply finds no
+    // <video> and no-ops.
+    private static let iosTapNoPauseJS: String = """
+        (function() {
+            var NO_PAUSE_WINDOW_MS = 700;
+
+            function inChrome(node) {
+                for (var n = node; n && n.classList; n = n.parentElement) {
+                    var c = n.classList;
+                    if (c.contains('ytp-chrome-top') || c.contains('ytp-chrome-bottom') ||
+                        c.contains('ytp-chrome-control') || c.contains('ytp-popup') ||
+                        c.contains('ytp-settings-menu') || c.contains('ytp-progress-bar-container')) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            var noPauseUntil = 0;
+
+            function armFromTouch(e) {
+                if (!inChrome(e.target)) { noPauseUntil = performance.now() + NO_PAUSE_WINDOW_MS; }
+            }
+            document.addEventListener('touchstart', armFromTouch, true);
+            document.addEventListener('mousedown', armFromTouch, true);
+
+            function resume(v) {
+                var player = document.getElementById('movie_player');
+                if (player && typeof player.playVideo === 'function') { player.playVideo(); return; }
+                var p = v.play();
+                if (p && p['catch']) { p['catch'](function () {}); }
+            }
+
+            function onVideoPause(e) {
+                if (performance.now() < noPauseUntil) {
+                    noPauseUntil = 0;
+                    resume(e.target);
+                }
+            }
+
+            function hook() {
+                var v = document.querySelector('video');
+                if (!v || v.__stTapNoPauseHooked) { return; }
+                v.__stTapNoPauseHooked = true;
+                v.addEventListener('pause', onVideoPause);
+            }
+
+            hook();
+            setInterval(hook, 1000);
         })();
         """
 }

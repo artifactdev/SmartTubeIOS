@@ -229,7 +229,9 @@ public final class WatchtimeTracker {
 
     /// Flushes the segment before a seek and starts the next segment at the target.
     /// This mirrors Android SmartTube's onSeekPositionChanged history update.
-    public func recordSeek(to targetPosition: TimeInterval, from currentPosition: TimeInterval, duration: TimeInterval) async {
+    public func recordSeek(
+        to targetPosition: TimeInterval, from currentPosition: TimeInterval, duration: TimeInterval
+    ) async {
         guard !videoId.isEmpty, duration > 0, !didReportFinal else { return }
         guard currentPosition > 0 else {
             segmentStart = max(0, min(duration, targetPosition))
