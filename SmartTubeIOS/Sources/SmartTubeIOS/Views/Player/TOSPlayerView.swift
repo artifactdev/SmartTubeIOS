@@ -111,6 +111,21 @@ public struct TOSPlayerView: View {
         }
     }
 
+    private func hideControls() {
+        controlsHideTask?.cancel()
+        controlsHideTask = nil
+        withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
+    }
+
+    /// Toggles SmartTube's overlay cluster — driven by taps on the video body. A tap
+    /// in the bottom control-bar strip (where YouTube's own play button / scrubber
+    /// live) is ignored while the overlay is visible, so using YouTube's controls
+    /// never dismisses SmartTube's overlay. YouTube's own control bar is left entirely
+    /// to YouTube — it shows on tap and auto-hides on its own.
+    private func toggleControls() {
+        if controlsVisible { hideControls() } else { showControls() }
+    }
+
     // MARK: - Brightness/volume gesture (#19)
     //
     // Left half of the screen adjusts brightness (UIScreen.main.brightness — a
@@ -289,10 +304,12 @@ public struct TOSPlayerView: View {
                             endVerticalDrag()
                         },
                         onEdgeSwipeExit: {
-                            // #328: distinct from the back button's minimize() — this
-                            // matches the mini-player's ✕ (tosState.stop()), fully
-                            // ending playback rather than continuing it in the background.
-                            tosState.stop()
+                            // #328: a left-edge rightward swipe mirrors iOS's
+                            // edge-swipe-back affordance, so it does what the back
+                            // button does — minimize() to the floating mini-player
+                            // with audio still playing (rather than stop(), which
+                            // fully ends playback).
+                            tosState.minimize()
                         },
                         verticalAdjustmentEnabled: store.settings.swipeBrightnessVolumeEnabled,
                         onSwipeDown: {
@@ -469,10 +486,17 @@ public struct TOSPlayerView: View {
                 dismiss()
             }
             #endif
-            // Restore saved watch position asynchronously.
+            // Restore saved watch position asynchronously — ONCE per view model.
             // We seek once the player reports .playing or .paused (i.e. after onReady fires)
             // so the IFrame API is ready to accept seekTo() calls.
+            //
+            // The vm survives minimize→expand (TOSPlayerStateStore owns it), but this
+            // view is re-created — and `.task` re-runs — on every re-present. Without the
+            // one-shot guard, expanding re-seeks to the last periodic watch-history
+            // checkpoint and rewinds an already-playing video.
             .task {
+                guard !vm.hasRestoredInitialPosition else { return }
+                vm.hasRestoredInitialPosition = true
                 let saved = await VideoStateStore.shared.state(for: video.id)?.position ?? 0
                 guard saved > 1 else { return }
                 // Poll briefly for player readiness before seeking.

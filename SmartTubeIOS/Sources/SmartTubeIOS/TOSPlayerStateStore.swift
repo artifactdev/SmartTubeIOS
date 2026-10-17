@@ -40,6 +40,11 @@ public final class TOSPlayerStateStore {
     /// The video currently loaded or playing. Non-nil when presentation != .hidden.
     public private(set) var currentVideo: Video?
 
+    /// Corner the floating mini-player is snapped to. Owned here (not in the view's
+    /// @State) so the user's chosen corner survives the expand → minimize cycle that
+    /// tears the view down and back up.
+    var miniPlayerCorner: TOSMiniPlayerCorner = .bottomTrailing
+
     // MARK: - Per-video fallback guard
     //
     // When the embed fires a fatal error (embeddingDisabled / notFound), we mark that
@@ -234,6 +239,10 @@ public final class TOSPlayerStateStore {
         guard presentation == .fullScreen else { return }
         let wasActive = vm?.playerState == .playing || vm?.playerState == .buffering
         presentation = .miniPlayer
+        // Hide YouTube's in-page chrome (title bar, controls, big play button,
+        // paused/related overlay, end-screen cards) in the floating corner window
+        // so only the video shows.
+        vm?.setMiniPlayerChrome(hidden: true)
         let action = dismissPlayerAction
         dismissPlayerAction = nil
         tosStoreLog.notice(
@@ -267,6 +276,8 @@ public final class TOSPlayerStateStore {
             "[TOSPlayerStateStore] expand — currentPresentation=\(String(describing: self.presentation))")
         guard presentation == .miniPlayer else { return }
         presentation = .fullScreen
+        // Restore YouTube's in-page chrome now that we're back full-screen.
+        vm?.setMiniPlayerChrome(hidden: false)
         tosStoreLog.notice("[TOSPlayerStateStore] expand — presentation set to .fullScreen")
     }
 
