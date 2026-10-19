@@ -52,6 +52,24 @@ YouTube iframe DOM  →  stateDetectionJS  →  window.__nativeYTCallback.postMe
                                           →  TOSPlayerView (SwiftUI) + XCUITest
 ```
 
+**Native transport overlay (2026-10)**
+`controls=0` plus `TOSPlayerChromeJS` hide YouTube's in-page chrome with a
+class-agnostic `visibility` hider; captions are whitelisted back in and ads are
+exempted through `html.st-ad`. `TOSPlayerTransportOverlay` draws the native
+chrome from the shared `PlayerControls` subviews (progress bar, icon buttons,
+quick-access pills, picker sheet). `window.__stPlayerAPI` exposes quality and
+audio-track over the embed's own player object; captions come from InnerTube's
+`captionTracks` and render natively via `CaptionCueView` (the TV-UA embed's
+captions module is not reliable). Unsupported options are hidden or disabled.
+`stateDetectionJS` ticks now carry
+`buffered`/`seekable`/`live`/`ad`/`rate`/`muted`. The quick-access CC pill
+toggles captions (long-press opens the language picker); the more menu's
+Captions row opens the same picker for track/language selection. See ADR-0010.
+
+**Ads** — the app does not hide or skip ads. If `#movie_player` has
+`ad-showing`, `TOSPlayerChromeJS` disables the hider so YouTube's ad UI and
+Skip Ad remain usable, and the native overlay yields.
+
 **Fallback**
 If `playerError.isFatal` (error 100/101/150/153), `TOSPlayerView` calls `onFallback()`.
 `MainSidebarView` sets `tosPlayerFallbackVideoId = video.id`, which switches that video
@@ -71,6 +89,9 @@ to the standard `PlayerView`. The guard clears when a different video is opened.
 | `didCommit` (not `didFinish`) for `navfinished` | `didFinish` waits for all subframes; the YouTube iframe may not finish if error 153 loops. `didCommit` fires as soon as the main HTML document is committed |
 | `startIfNeeded()` guard (`hasStartedLoading`) | SwiftUI calls `View.init()` many times per render cycle, creating and discarding `State(initialValue:)` values. Only the instance that appears in view hierarchy calls `startIfNeeded()` |
 | `#if os(macOS)` around `TOSPlayerView` in RootView | `TOSPlayerView` and `TOSPlayerViewModel` are macOS-only; iOS build would fail without the guard |
+| `controls=0` + `TOSPlayerChromeJS` hider | Class-agnostic hide survives YouTube renames; captions whitelisted; ads exempted via `html.st-ad` |
+| Native overlay composed from shared `PlayerControls` subviews | Visual parity with the direct player; one progress bar/pill/time-label implementation (ADR-0010) |
+| `window.__stPlayerAPI` facade | The TV-UA embed does not expose the documented IFrame API; try/catch + hidden/disabled fallback |
 
 ---
 

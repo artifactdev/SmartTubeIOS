@@ -42,16 +42,15 @@ extension TOSPlayerViewModel {
         center.previousTrackCommand.removeTarget(nil)
 
         center.playCommand.addTarget { [weak self] _ in
-            self?.play()
+            self?.playInline()
             return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            self?.pause()
+            self?.pauseInline()
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            guard let self else { return .success }
-            if self.playerState == .playing { self.pause() } else { self.play() }
+            self?.togglePlayPause()
             return .success
         }
         center.skipForwardCommand.preferredIntervals = [10]
