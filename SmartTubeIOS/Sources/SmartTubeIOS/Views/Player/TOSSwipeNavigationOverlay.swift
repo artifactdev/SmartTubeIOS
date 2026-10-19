@@ -42,6 +42,22 @@ struct TOSSwipeNavigationOverlay: UIViewRepresentable {
     /// gesture instead of replacing it everywhere.
     var onEdgeSwipeExit: (() -> Void)? = nil
     var isEnabled: Bool = true
+    /// When `false`, vertical drags never adjust brightness/volume: the gesture is not
+    /// committed to "vertical" and `onVerticalDragChanged`/`onVerticalDragEnded` are not
+    /// called, so a vertical swipe simply does nothing (horizontal swipe-nav still works).
+    /// Backed by `AppSettings.swipeBrightnessVolumeEnabled`.
+    var verticalAdjustmentEnabled: Bool = true
+    /// Fired when a downward vertical drag that began in the *middle* of the screen ends,
+    /// so the caller can minimize the player to the floating corner window. Edge-zone
+    /// drags (brightness/volume) never fire this. Backed by
+    /// `AppSettings.swipeDownToMiniPlayerEnabled`.
+    var onSwipeDown: (() -> Void)?
+    /// When `true`, a middle-screen vertical drag is classified as vertical even if
+    /// `verticalAdjustmentEnabled` is `false`, so `onSwipeDown` can still fire.
+    var swipeDownMinimizeEnabled: Bool = false
+    /// Minimum downward translationY (points) for a middle-screen vertical drag to be
+    /// treated as a minimize swipe rather than an incidental wobble.
+    var swipeDownMinimizeThreshold: CGFloat = 60
     /// Touches below this fraction of the screen height are ignored, leaving
     /// YouTube's bottom scrubber/control-bar free to handle horizontal drags.
     var verticalActivationFraction: CGFloat = 0.75
@@ -125,7 +141,9 @@ struct TOSSwipeNavigationOverlay: UIViewRepresentable {
                 // Once a gesture commits to horizontal (a swipe-nav candidate), never
                 // switch it to vertical mid-drag — only the reverse (small initial
                 // wiggle before the real direction emerges) is allowed.
-                if !isVerticalDrag, abs(t.y) > abs(t.x), abs(t.y) > 8 {
+                if parent.verticalAdjustmentEnabled || parent.swipeDownMinimizeEnabled, !isVerticalDrag,
+                    abs(t.y) > abs(t.x), abs(t.y) > 8
+                {
                     isVerticalDrag = true
                     if let view = gr.view {
                         let startX = gestureStartX ?? (gr.location(in: view).x - t.x)
@@ -152,7 +170,20 @@ struct TOSSwipeNavigationOverlay: UIViewRepresentable {
             }
             guard gr.state == .ended || gr.state == .cancelled else { return }
             if isVerticalDrag {
-                parent.onVerticalDragEnded?()
+                // A middle-screen downward swipe (never an edge zone) minimizes the
+                // player to the floating corner window; everything else ends the
+                // brightness/volume adjustment (or is a no-op).
+                let isMiddle = verticalDragIsLeftHalf == nil
+                if gr.state == .ended, parent.swipeDownMinimizeEnabled,
+                    GestureEdgeZone.shouldMinimizeOnSwipeDown(
+                        isMiddle: isMiddle, translationY: t.y, threshold: parent.swipeDownMinimizeThreshold),
+                    let onSwipeDown = parent.onSwipeDown
+                {
+                    swipeLog.notice("[handlePan] middle swipe-down confirmed (ty=\(Int(t.y))) — minimize")
+                    onSwipeDown()
+                } else {
+                    parent.onVerticalDragEnded?()
+                }
                 return
             }
             guard gr.state == .ended else { return }

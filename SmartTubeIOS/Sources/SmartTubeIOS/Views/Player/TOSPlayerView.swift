@@ -22,7 +22,7 @@ private let tosViewLog = Logger(subsystem: "com.void.smarttube.app", category: "
 //            z-order — SwiftUI layout cannot steer clear of it from inside.
 //   iOS   — Back button (top-left). Safe on iOS: full-screen modal has no
 //            OS chrome above it. Back → TOSPlayerStateStore.minimize() so
-//            audio continues in TOSMiniPlayerView.
+//            audio continues in TOSFloatingPlayerView.
 //
 // Entry path (macOS):
 //   MainSidebarView (RootView.swift)
@@ -121,6 +121,7 @@ public struct TOSPlayerView: View {
     // wherever the value currently is, rather than snapping to an absolute
     // position derived from touch coordinates.
     private func handleVerticalDrag(isLeftHalf: Bool, translationY: CGFloat, viewHeight: CGFloat) {
+        guard store.settings.swipeBrightnessVolumeEnabled else { return }
         if isLeftHalf {
             let start = brightnessDragStart ?? Float(UIScreen.main.brightness)
             if brightnessDragStart == nil { brightnessDragStart = start }
@@ -289,7 +290,13 @@ public struct TOSPlayerView: View {
                             // matches the mini-player's ✕ (tosState.stop()), fully
                             // ending playback rather than continuing it in the background.
                             tosState.stop()
-                        }
+                        },
+                        verticalAdjustmentEnabled: store.settings.swipeBrightnessVolumeEnabled,
+                        onSwipeDown: {
+                            guard store.settings.swipeDownToMiniPlayerEnabled else { return }
+                            tosState.minimize()
+                        },
+                        swipeDownMinimizeEnabled: store.settings.swipeDownToMiniPlayerEnabled
                     )
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
@@ -522,7 +529,7 @@ public struct TOSPlayerView: View {
     #if os(iOS)
     // MARK: - Back button (iOS only)
     //
-    // Calls tosState.minimize() so audio continues in TOSMiniPlayerView —
+    // Calls tosState.minimize() so audio continues in TOSFloatingPlayerView —
     // unlike macOS's Esc which fully stops.
     //
     // Positioning: this view is placed inside the GeometryReader/ZStack in
