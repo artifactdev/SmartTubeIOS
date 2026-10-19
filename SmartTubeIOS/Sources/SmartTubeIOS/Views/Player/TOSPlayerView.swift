@@ -125,6 +125,13 @@ public struct TOSPlayerView: View {
         withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
     }
 
+    /// Toggles SmartTube's native overlay cluster. A tap in the top bar or the
+    /// bottom control strip is ignored while the overlay is visible, because those
+    /// areas have their own buttons and the progress bar.
+    private func toggleControls() {
+        if controlsVisible { hideControls() } else { showControls() }
+    }
+
     // MARK: - Brightness/volume gesture (#19)
     //
     // Left half of the screen adjusts brightness (UIScreen.main.brightness — a
@@ -303,6 +310,23 @@ public struct TOSPlayerView: View {
                     TOSSwipeNavigationOverlay(
                         onSwipeLeft: { vm.playNext() },
                         onSwipeRight: { vm.playPrevious() },
+                        onTap: { point in
+                            // The tap recognizer is attached to the window with
+                            // cancelsTouchesInView=false, so it fires alongside —
+                            // not instead of — YouTube's own touch handling. Only
+                            // SmartTube's native overlay is toggled here; playback
+                            // is left untouched.
+                            let height = geo.size.height
+                            if controlsVisible, height > 0 {
+                                // Ignore taps on the native top bar and bottom
+                                // control strip — those have their own buttons
+                                // and the progress bar. A tap in the middle of
+                                // the video still toggles the overlay.
+                                let topGuard = geo.safeAreaInsets.top + 80
+                                if point.y <= topGuard || point.y >= height * 0.78 { return }
+                            }
+                            toggleControls()
+                        },
                         onVerticalDragChanged: { isLeftHalf, translationY, viewHeight in
                             handleVerticalDrag(
                                 isLeftHalf: isLeftHalf, translationY: translationY, viewHeight: viewHeight)
@@ -577,13 +601,6 @@ public struct TOSPlayerView: View {
                 onFallback()
             }
             #if os(iOS)
-            .onChange(of: vm.surfaceTapRevision) { _, _ in
-                if vm.surfaceTapControlsVisible {
-                    showControls()
-                } else {
-                    hideControls()
-                }
-            }
             // Show controls briefly whenever a new video loads via swipe navigation
             // (tosState.vm is replaced by TOSPlayerStateStore.play). Without this the
             // controls stay hidden if the user swiped while they were already hidden.
