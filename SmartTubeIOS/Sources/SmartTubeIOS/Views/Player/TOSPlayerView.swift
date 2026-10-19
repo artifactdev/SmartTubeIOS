@@ -704,33 +704,39 @@ public struct TOSPlayerView: View {
             // are non-interactive (YouTube's scrubber keeps every touch).
             if !vm.chapters.isEmpty || !vm.sponsorSegments.isEmpty {
                 HStack(spacing: 24) {
-                    secondaryControlButton(
-                        symbol: AppSymbol.previousChapter, isEnabled: vm.hasPreviousChapter
-                    ) {
-                        vm.skipToPreviousChapter()
+                    if !vm.chapters.isEmpty {
+                        secondaryControlButton(
+                            symbol: AppSymbol.previousChapter, isEnabled: vm.hasPreviousChapter
+                        ) {
+                            vm.skipToPreviousChapter()
+                        }
+                        .accessibilityIdentifier("tosPlayer.previousChapterButton")
                     }
-                    .accessibilityIdentifier("tosPlayer.previousChapterButton")
 
-                    secondaryControlButton(
-                        symbol: "backward.fill", isEnabled: vm.hasPreviousSponsorSegment
-                    ) {
-                        vm.skipToPreviousSponsorSegment()
-                    }
-                    .accessibilityIdentifier("tosPlayer.previousSegmentButton")
+                    if !vm.sponsorSegments.isEmpty {
+                        secondaryControlButton(
+                            symbol: "backward.fill", isEnabled: vm.hasPreviousSponsorSegment
+                        ) {
+                            vm.skipToPreviousSponsorSegment()
+                        }
+                        .accessibilityIdentifier("tosPlayer.previousSegmentButton")
 
-                    secondaryControlButton(
-                        symbol: "forward.fill", isEnabled: vm.hasNextSponsorSegment
-                    ) {
-                        vm.skipToNextSponsorSegment()
+                        secondaryControlButton(
+                            symbol: "forward.fill", isEnabled: vm.hasNextSponsorSegment
+                        ) {
+                            vm.skipToNextSponsorSegment()
+                        }
+                        .accessibilityIdentifier("tosPlayer.nextSegmentButton")
                     }
-                    .accessibilityIdentifier("tosPlayer.nextSegmentButton")
 
-                    secondaryControlButton(
-                        symbol: AppSymbol.nextChapter, isEnabled: vm.hasNextChapter
-                    ) {
-                        vm.skipToNextChapter()
+                    if !vm.chapters.isEmpty {
+                        secondaryControlButton(
+                            symbol: AppSymbol.nextChapter, isEnabled: vm.hasNextChapter
+                        ) {
+                            vm.skipToNextChapter()
+                        }
+                        .accessibilityIdentifier("tosPlayer.nextChapterButton")
                     }
-                    .accessibilityIdentifier("tosPlayer.nextChapterButton")
 
                     Spacer()
                 }
