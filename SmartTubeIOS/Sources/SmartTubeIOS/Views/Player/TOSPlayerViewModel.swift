@@ -3,6 +3,7 @@ import Foundation
 import CoreFoundation
 import AVFoundation
 import WebKit
+import Observation
 import SmartTubeIOSCore
 import os
 #if os(iOS)
@@ -71,6 +72,56 @@ final class TOSPlayerViewModel: NSObject {
     var isReady: Bool = false
     /// Single in-flight history-session resolution; tick callbacks can arrive rapidly.
     var trackingSessionTask: Task<Void, Never>?
+
+    // MARK: - Native transport
+    //
+    // Mirrors PlaybackViewModel's scrub surface so PlayerProgressBarView can
+    // drive both engines. The JS player remains the source of truth; these
+    // properties only own the drag window and the pending-seek guard.
+    var isScrubbing: Bool = false
+    var scrubTime: Double = 0
+    var bufferedRanges: [ClosedRange<Double>] = []
+    var seekableRanges: [ClosedRange<Double>] = []
+    var isLive: Bool = false
+    var isAd: Bool = false
+    /// Incremented on every play/pause request so a late verification play
+    /// cannot clobber a newer pause (ported from ShortsEmbedPlayerViewModel).
+    @ObservationIgnored var playPauseEpoch: Int = 0
+    /// Target of the last committed scrub. While set, tick-driven
+    /// `currentTime` updates are suppressed until the player lands near it.
+    @ObservationIgnored var pendingSeekTarget: Double?
+    @ObservationIgnored var pendingSeekSetAt: Date?
+
+    // MARK: - Media options (quality / captions / audio track)
+    //
+    // Populated from the embed's own player object (window.__stPlayerAPI).
+    // Empty arrays mean the TV-UA embed did not expose the corresponding API;
+    // the overlay hides/disables that picker rather than showing a no-op.
+    var availableQualities: [TOSQualityOption] = []
+    var selectedQualityID: String?
+    var actualQuality: TOSQualityOption?
+    var availableAudioTracks: [TOSAudioOption] = []
+    var selectedAudioTrack: TOSAudioOption?
+    @ObservationIgnored var hasAppliedMediaPreferences: Bool = false
+    /// Captions come from InnerTube's captionTracks (shared CaptionsManager),
+    /// not the TV embed's captions module — that module is not reliable under
+    /// the TV user agent. Rendering is native (`CaptionCueView`).
+    let captionsManager: CaptionsManager
+    @ObservationIgnored var captionFetchTask: Task<Void, Never>?
+    /// The in-flight native-caption load, if any. Coalesces concurrent callers
+    /// (ready-time fetch, the CC pill, the picker's Reload row) onto one network
+    /// round-trip so a toggle during loading still resolves to a track instead
+    /// of silently no-op'ing against an empty list.
+    @ObservationIgnored var nativeCaptionsTask: Task<Void, Never>?
+    @ObservationIgnored var hasFetchedNativeCaptions = false
+    /// True while a native-caption fetch is in flight — drives the picker's
+    /// "Loading…" row so the empty state is distinguishable from "no tracks".
+    var isLoadingNativeCaptions = false
+    /// User-visible caption load state for the picker's empty row.
+    var captionLoadError: String?
+    /// Last explicitly selected caption track — remembered so the quick-access
+    /// CC toggle can turn captions back on without the picker.
+    @ObservationIgnored var lastSelectedCaption: CaptionTrack?
     /// Non-nil when the player encounters an error that requires falling back.
     var playerError: TOSPlayerError? = nil
 
@@ -283,6 +334,7 @@ final class TOSPlayerViewModel: NSObject {
         self.isIncognito = isIncognito
         self.api = api
         self.tracker = WatchtimeTracker(api: api)
+        self.captionsManager = CaptionsManager()
         self.likeDislike = LikeDislikeController(
             api: api,
             logError: { msg in tosLog.error("[likeDislike] \(msg)") }
@@ -333,6 +385,29 @@ final class TOSPlayerViewModel: NSObject {
             in: .page
         )
         contentController.addUserScript(detectionScript)
+
+        // Hide YouTube's in-page chrome so the native transport overlay is the
+        // only visible UI. Injected at document-start so the first paint is
+        // already chrome-free; the script itself defers its work to
+        // DOMContentLoaded when the document is still loading.
+        let chromeScript = WKUserScript(
+            source: TOSPlayerChromeJS.hiderJS,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: .page
+        )
+        contentController.addUserScript(chromeScript)
+
+        // Media-option facade over the embed's own player object (quality,
+        // captions, audio tracks). Defines window.__stPlayerAPI; no work until
+        // Swift calls it.
+        let mediaOptionsScript = WKUserScript(
+            source: TOSPlayerMediaOptionsJS.helperJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: false,
+            in: .page
+        )
+        contentController.addUserScript(mediaOptionsScript)
 
         #if os(iOS)
         // iOS-only mini-player chrome helper (see iosMiniChromeJS). Installs
@@ -736,10 +811,19 @@ final class TOSPlayerViewModel: NSObject {
         comps.queryItems = [
             URLQueryItem(name: "autoplay", value: "1"),
             URLQueryItem(name: "mute", value: "1"),
-            URLQueryItem(name: "controls", value: "1"),
+            URLQueryItem(name: "controls", value: "0"),
             URLQueryItem(name: "playsinline", value: "1"),
             URLQueryItem(name: "rel", value: "0"),
             URLQueryItem(name: "iv_load_policy", value: "3"),
+            // Force the captions module to load so `getOption('captions',
+            // 'tracklist')` has tracks to enumerate. The player is turned back
+            // off after the track list is read unless the user has a saved
+            // caption-language preference (see refreshMediaOptions).
+            URLQueryItem(name: "cc_load_policy", value: "1"),
+            URLQueryItem(
+                name: "cc_lang_pref",
+                value: settings.preferredCaptionLanguage
+                    ?? Locale.current.language.languageCode?.identifier ?? "en"),
             URLQueryItem(name: "start", value: "\(Int(startTime))"),
             URLQueryItem(name: "origin", value: "https://www.example.com"),
         ]
@@ -899,9 +983,37 @@ final class TOSPlayerViewModel: NSObject {
             });
             _observer.observe(document.documentElement, {childList: true, subtree: true});
 
+            // Re-attach lightweight media-event listeners whenever YouTube
+            // replaces the <video> element (quality/audio switches can do this).
+            // They only shorten the latency between an event and the next tick;
+            // the 250ms poll remains the source of truth.
+            var _hookedVideo = null;
+            function hookVideo(v) {
+                if (!v || v === _hookedVideo) return;
+                _hookedVideo = v;
+                ['timeupdate', 'seeked', 'durationchange', 'ratechange', 'volumechange', 'ended'].forEach(function(ev) {
+                    v.addEventListener(ev, function() { setTimeout(pollVideo, 0); });
+                });
+            }
+
+            // Serialise TimeRanges into [[start, end], ...]. Non-finite values
+            // (live streams) are dropped — JSON.stringify turns Infinity into
+            // null, which Swift would otherwise decode as 0.
+            function ranges(list) {
+                var out = [];
+                try {
+                    for (var i = 0; i < list.length; i++) {
+                        var s = list.start(i), e = list.end(i);
+                        if (isFinite(s) && isFinite(e) && e >= s) { out.push([s, e]); }
+                    }
+                } catch (e) {}
+                return out;
+            }
+
             function pollVideo() {
                 var video = document.querySelector('video');
                 if (!video) return;
+                hookVideo(video);
 
                 // video.paused can flicker true→false within a single poll interval right
                 // after a resume (confirmed via live device log on the Shorts copy of this
@@ -930,10 +1042,12 @@ final class TOSPlayerViewModel: NSObject {
 
                 var t = video.currentTime || 0;
 
+                var _live = !isFinite(video.duration);
                 if (_prevState === -2) {
                     _prevState = s;
-                    postMsg({type: 'ready', duration: video.duration || 0,
-                             readyState: video.readyState, buffered: video.buffered.length});
+                    postMsg({type: 'ready', duration: _live ? 0 : (video.duration || 0),
+                             readyState: video.readyState, buffered: video.buffered.length,
+                             live: _live});
                 }
 
                 // Kick off playback if YouTube's own autoplay didn't fire (common in WKWebView).
@@ -1001,7 +1115,11 @@ final class TOSPlayerViewModel: NSObject {
                     postMsg({type: 'pollUnmuted', t: t, retriesLeft: _bgRemutePollRetries, muted: video.muted});
                 }
 
-                postMsg({type: 'tick', t: t, state: s, duration: video.duration || 0});
+                var _mp = document.getElementById('movie_player');
+                var _ad = !!(_mp && _mp.classList.contains('ad-showing'));
+                postMsg({type: 'tick', t: t, state: s, duration: _live ? 0 : (video.duration || 0),
+                         buffered: ranges(video.buffered), seekable: ranges(video.seekable),
+                         live: _live, ad: _ad, rate: video.playbackRate || 1, muted: !!video.muted});
 
                 if (s !== _prevState) {
                     _prevState = s;

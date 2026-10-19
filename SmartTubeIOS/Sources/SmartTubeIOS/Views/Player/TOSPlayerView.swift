@@ -71,6 +71,11 @@ public struct TOSPlayerView: View {
     /// Drives `chaptersOverlay` (see moreButton's Chapters row) — same rationale as
     /// showCommentsSheet above (#10).
     @State private var showChaptersSheet = false
+    /// Drives the TOS caption picker. Owned here (not in the overlay) so the
+    /// more menu's Captions row and the quick-access CC pill share one picker.
+    @State private var showCaptionsPicker = false
+    /// Same ownership idea for the audio-track picker.
+    @State private var showAudioTrackPicker = false
     /// Feedback alert for "Report Incorrect Segment" (#67) on either SponsorBlock toast.
     @State private var reportSegmentAlert: DownloadAlertItem?
 
@@ -166,6 +171,27 @@ public struct TOSPlayerView: View {
         }
     }
     #endif
+
+    /// Bottom clearance for the native caption cue: above the progress bar and
+    /// quick-access row when controls are visible, a small margin otherwise.
+    private var captionBottomPadding: CGFloat {
+        #if os(iOS)
+        controlsVisible ? 130 : 24
+        #else
+        90
+        #endif
+    }
+
+    /// Bridges the iOS-only `isLandscapeLocked` state to the transport
+    /// overlay's binding. macOS has no landscape-lock control, so it receives
+    /// a constant binding and the overlay omits the button.
+    private var landscapeLockBinding: Binding<Bool> {
+        #if os(iOS)
+        Binding(get: { isLandscapeLocked }, set: { isLandscapeLocked = $0 })
+        #else
+        .constant(false)
+        #endif
+    }
 
     public init(video: Video, api: InnerTubeAPI, onFallback: @escaping () -> Void = {}) {
         self.video = video
@@ -275,16 +301,6 @@ public struct TOSPlayerView: View {
                     }
                     #endif
 
-                    #if os(macOS)
-                    // MARK: Top-right control cluster — more menu (like/dislike, sleep
-                    // timer, share) + playback speed picker. See topRightControls for why
-                    // these are native Menus rather than ports of the standard player's
-                    // custom overlay views. On iOS both live in the back-button row
-                    // instead (see backButton()) — there's no on-screen back button here
-                    // to anchor them to on macOS.
-                    topRightControls(topInset: geo.safeAreaInsets.top, vm: vm)
-                    #endif
-
                     #if os(iOS)
                     // MARK: Swipe-left/right navigation overlay (iOS only)
                     // Mirrors PlayerSwipeGestureOverlay's left/right behaviour for the
@@ -309,7 +325,14 @@ public struct TOSPlayerView: View {
                             // `point` is in window coordinates and `geo.size` is the
                             // full-bleed player size, so the comparison is orientation-safe.
                             let height = geo.size.height
-                            if controlsVisible, height > 0, point.y >= height * 0.85 { return }
+                            if controlsVisible, height > 0 {
+                                // Ignore taps on the native top bar and bottom
+                                // control strip — those have their own buttons
+                                // and the progress bar. A tap in the middle of
+                                // the video still toggles the overlay.
+                                let topGuard = geo.safeAreaInsets.top + 80
+                                if point.y <= topGuard || point.y >= height * 0.78 { return }
+                            }
                             toggleControls()
                         },
                         onVerticalDragChanged: { isLeftHalf, translationY, viewHeight in
@@ -350,16 +373,60 @@ public struct TOSPlayerView: View {
                         .frame(width: 0, height: 0)
                         .accessibilityHidden(true)
 
-                    // MARK: Back button (iOS only)
-                    // Safe here — full-screen modal has no OS chrome above it. Tapping
-                    // minimizes to the mini-player so audio continues (unlike macOS where
-                    // Esc fully dismisses). A small fixed padding is enough to clear the
-                    // status bar — see backButton's doc comment for why `topInset` must
-                    // NOT be added here too.
-                    backButton(vm: vm)
-                        .opacity(controlsVisible ? 1 : 0)
-                        .allowsHitTesting(controlsVisible)
                     #endif
+
+                    // MARK: Native transport overlay
+                    //
+                    // Replaces YouTube's own chrome (hidden by TOSPlayerChromeJS)
+                    // with the same control components used by the direct player.
+                    // On iOS the back button minimizes to the mini-player so audio
+                    // continues; on macOS there is no back button (Esc dismisses).
+                    #if os(iOS)
+                    TOSPlayerTransportOverlay(
+                        vm: vm,
+                        video: video,
+                        safeAreaInsets: geo.safeAreaInsets,
+                        controlsVisible: controlsVisible,
+                        isLandscapeLocked: landscapeLockBinding,
+                        moreMenu: { moreButton(vm: vm) },
+                        onBack: { tosState.minimize() },
+                        onInteraction: { showControls() },
+                        showCaptionsPicker: $showCaptionsPicker,
+                        showAudioTrackPicker: $showAudioTrackPicker
+                    )
+                    #else
+                    // macOS keeps the overlay visible; the window's titlebar
+                    // chrome floats above the content view, so there is no
+                    // auto-hide timer and no on-screen back button (Esc closes).
+                    TOSPlayerTransportOverlay(
+                        vm: vm,
+                        video: video,
+                        safeAreaInsets: geo.safeAreaInsets,
+                        controlsVisible: true,
+                        isLandscapeLocked: .constant(false),
+                        moreMenu: { moreButton(vm: vm) },
+                        onBack: nil,
+                        onInteraction: {},
+                        showCaptionsPicker: $showCaptionsPicker,
+                        showAudioTrackPicker: $showAudioTrackPicker
+                    )
+                    #endif
+
+                    // MARK: Native captions
+                    //
+                    // TOS captions come from InnerTube's captionTracks and are
+                    // rendered here (the TV embed's captions module is not
+                    // reliable). Mirrors PlayerView's caption cue placement.
+                    if let cue = vm.currentCaptionCue {
+                        VStack(spacing: 0) {
+                            Spacer()
+                            CaptionCueView(text: cue.text)
+                                .padding(.bottom, captionBottomPadding)
+                                .animation(.easeInOut(duration: 0.2), value: captionBottomPadding)
+                        }
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                    }
 
                     // MARK: SponsorBlock skip toast (bottom-centre)
                     if let seg = vm.currentToastSegment {
@@ -812,6 +879,36 @@ public struct TOSPlayerView: View {
             }
 
             Button {
+                showCaptionsPicker = true
+            } label: {
+                HStack {
+                    Label(
+                        "Captions",
+                        systemImage: vm.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill")
+                    Spacer()
+                    Text(
+                        vm.selectedCaption.map {
+                            $0.isAutoGenerated ? "\($0.name) (auto)" : $0.name
+                        } ?? "Off"
+                    )
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.captionsRow")
+
+            Button {
+                showAudioTrackPicker = true
+            } label: {
+                HStack {
+                    Label("Audio Track", systemImage: "waveform")
+                    Spacer()
+                    Text(vm.selectedAudioTrack?.name ?? "Auto")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.audioTrackRow")
+
+            Button {
                 showCommentsSheet = true
                 vm.loadComments()
             } label: {
@@ -1018,9 +1115,18 @@ public struct TOSPlayerView: View {
 #if os(macOS)
 private struct YouTubeWebPlayerView: NSViewRepresentable {
     let webView: WKWebView
+    /// Fires once the NSView is about to be displayed. Mirrors the iOS
+    /// container's window-ready callback so `TOSPlayerView.body` can pass the
+    /// same closure on both platforms. On macOS the player is a full-window
+    /// overlay presented after the browse content, so the view is already in
+    /// a visible window when `makeNSView` runs.
+    let onWindowReady: (() -> Void)?
 
     func makeNSView(context: Context) -> WKWebView {
         webView.autoresizingMask = [.width, .height]
+        if let onWindowReady {
+            DispatchQueue.main.async { onWindowReady() }
+        }
         return webView
     }
 

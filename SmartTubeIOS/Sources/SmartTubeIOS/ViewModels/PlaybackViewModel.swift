@@ -78,6 +78,10 @@ public final class PlaybackViewModel {
     public internal(set) var videoEnded: Bool = false
     public internal(set) var currentTime: TimeInterval = 0
     public internal(set) var duration: TimeInterval = 0
+    /// Buffered (loaded) time ranges from the current AVPlayerItem, used by
+    /// the shared progress bar to draw the buffered track. Mirrors the TOS
+    /// player's `bufferedRanges`.
+    public internal(set) var bufferedRanges: [ClosedRange<TimeInterval>] = []
 
     // MARK: - Forwarding computed properties (views unchanged)
 
@@ -123,6 +127,9 @@ public final class PlaybackViewModel {
         get { audioManager.selectedAudioTrack }
         set { audioManager.selectedAudioTrack = newValue }
     }
+    /// Last explicitly selected caption track — remembered so the quick-access
+    /// CC toggle can turn captions back on without re-opening the picker.
+    @ObservationIgnored public internal(set) var lastSelectedCaption: CaptionTrack?
     /// Short message displayed by `ToastModifier` in the player; cleared automatically after 2 s.
     public var toastMessage: String? = nil
     public internal(set) var relatedVideos: [Video] = []
