@@ -367,9 +367,7 @@ final class TOSPlayerViewModel: NSObject {
         // video player when the user taps play, taking control away from the WKWebView.
         config.allowsInlineMediaPlayback = true
         // AirPlay is deliberately disabled app-wide: routing the TOS embed to an
-        // AirPlay receiver left the video off-screen and capped quality. Users
-        // who want a TV use the in-page fullscreen control (native PiP/AirPlay
-        // inside the system player) instead of an in-app route picker.
+        // AirPlay receiver left the video off-screen and capped quality.
         config.allowsAirPlayForMediaPlayback = false
         // Explicit (default may vary across iOS versions) — required for the native
         // PiP button to appear in the embedded <video>'s controls. Investigated as
