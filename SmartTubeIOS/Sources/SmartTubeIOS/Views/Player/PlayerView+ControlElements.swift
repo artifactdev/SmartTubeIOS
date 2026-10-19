@@ -550,6 +550,7 @@ extension PlayerControlsOverlay {
         #endif
     }
 
+    #if !os(tvOS)
     var iosProgressBar: some View {
         PlayerProgressBarView(
             currentTime: vm.currentTime,
@@ -567,6 +568,7 @@ extension PlayerControlsOverlay {
             onSeek: { vm.seek(to: $0) }
         )
     }
+    #endif
 
     // Chapter tick marks on the progress bar — small white notches at each chapter boundary.
     // Each tick has a 24×44 pt transparent tap area so the user can tap to jump to it.
