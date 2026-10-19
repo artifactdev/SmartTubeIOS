@@ -149,6 +149,13 @@ extension TOSPlayerViewModel {
     /// auto-skips, shows a toast, or clears any active toast — driven by every
     /// "tick" message (see `handleScriptMessage`'s "tick" case).
     func checkSponsorSkip(at time: Double) {
+        // Ads are never skipped and never covered. YouTube reports the ad via
+        // the `ad-showing` class on every tick (see stateDetectionJS), so no
+        // segment decision or toast is allowed to run while an ad is playing.
+        guard !isAd else {
+            currentToastSegment = nil
+            return
+        }
         if let end = activeSkipEnd, time >= end { activeSkipEnd = nil }
 
         let decision = SponsorBlockDecisionEngine.decide(

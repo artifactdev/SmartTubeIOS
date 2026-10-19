@@ -266,7 +266,10 @@ public struct TOSPlayerView: View {
                     // custom overlay views. On iOS both live in the back-button row
                     // instead (see backButton()) — there's no on-screen back button here
                     // to anchor them to on macOS.
-                    topRightControls(topInset: geo.safeAreaInsets.top, vm: vm)
+                    // Never draw native chrome over an ad frame.
+                    if !vm.isAd {
+                        topRightControls(topInset: geo.safeAreaInsets.top, vm: vm)
+                    }
                     #endif
 
                     #if os(iOS)
@@ -295,7 +298,8 @@ public struct TOSPlayerView: View {
                     .accessibilityHidden(true)
 
                     // MARK: Brightness/volume adjustment HUD (#19)
-                    if let gestureHUD {
+                    // Suppressed during ads: no native surface may cover an ad frame.
+                    if let gestureHUD, !vm.isAd {
                         GestureAdjustmentHUD(info: gestureHUD)
                             .transition(.opacity)
                     }
@@ -314,17 +318,20 @@ public struct TOSPlayerView: View {
                     // status bar — see backButton's doc comment for why `topInset` must
                     // NOT be added here too.
                     backButton(vm: vm)
-                        .opacity(controlsVisible ? 1 : 0)
-                        .allowsHitTesting(controlsVisible)
+                        .opacity(controlsVisible && !vm.isAd ? 1 : 0)
+                        .allowsHitTesting(controlsVisible && !vm.isAd)
                     #endif
 
                     // MARK: SponsorBlock skip toast (bottom-centre)
-                    if let seg = vm.currentToastSegment {
+                    // Ads are never covered: both toasts are suppressed while
+                    // `isAd` is set, and checkSponsorSkip itself refuses to
+                    // decide while an ad is playing.
+                    if !vm.isAd, let seg = vm.currentToastSegment {
                         sponsorToast(for: seg, vm: vm)
                     }
 
                     // MARK: SponsorBlock undo-auto-skip toast (#20)
-                    if let seg = vm.recentAutoSkip {
+                    if !vm.isAd, let seg = vm.recentAutoSkip {
                         undoAutoSkipToast(for: seg, vm: vm)
                     }
 
@@ -976,9 +983,16 @@ public struct TOSPlayerView: View {
 #if os(macOS)
 private struct YouTubeWebPlayerView: NSViewRepresentable {
     let webView: WKWebView
+    /// Kept for signature parity with the iOS container: `TOSPlayerView.body`
+    /// passes the same closure on both platforms. On macOS the view is already
+    /// in a visible window when `makeNSView` runs.
+    let onWindowReady: (() -> Void)?
 
     func makeNSView(context: Context) -> WKWebView {
         webView.autoresizingMask = [.width, .height]
+        if let onWindowReady {
+            DispatchQueue.main.async { onWindowReady() }
+        }
         return webView
     }
 

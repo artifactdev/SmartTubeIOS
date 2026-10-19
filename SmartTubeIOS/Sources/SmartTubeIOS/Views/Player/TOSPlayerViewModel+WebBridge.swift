@@ -185,6 +185,17 @@ extension TOSPlayerViewModel {
             let t = (json["t"] as? Double) ?? 0
             let s = (json["state"] as? Int) ?? 999
             currentTime = t
+            // Ad state must be applied before checkSponsorSkip runs below: while
+            // an ad is showing, no skip decision or toast may touch the ad frame.
+            let tickAd = (json["ad"] as? Bool) ?? false
+            if tickAd != isAd {
+                isAd = tickAd
+                tosLog.notice("[ytCallback] ad state → \(tickAd, privacy: .public)")
+                if tickAd {
+                    currentToastSegment = nil
+                    recentAutoSkip = nil
+                }
+            }
             // "ready" fires on the very first poll, before video.duration has
             // necessarily loaded (the video starts muted for autoplay-policy
             // reasons, so metadata can lag a poll or two) — confirmed live:
@@ -355,7 +366,7 @@ extension TOSPlayerViewModel {
                 )
                 return
             }
-            guard let image = image, let data = image.pngData() else {
+            guard let image = image, let data = tosPNGData(from: image) else {
                 tosLog.error("[snapshot] no image/PNG data returned")
                 completion?(false)
                 CFNotificationCenterPostNotification(
@@ -381,4 +392,21 @@ extension TOSPlayerViewModel {
         }
     }
 }
+
+/// `NSImage` has no `pngData()` equivalent to UIKit's. Used by
+/// `takeSnapshot(to:)`, which is primarily an iOS UI-test helper but must
+/// compile on macOS for the SwiftPM test target (the package builds the UI
+/// target for native macOS too).
+#if os(macOS)
+private func tosPNGData(from image: NSImage) -> Data? {
+    guard let tiff = image.tiffRepresentation,
+        let bitmap = NSBitmapImageRep(data: tiff)
+    else { return nil }
+    return bitmap.representation(using: .png, properties: [:])
+}
+#else
+private func tosPNGData(from image: UIImage) -> Data? {
+    image.pngData()
+}
+#endif
 #endif  // !os(tvOS)

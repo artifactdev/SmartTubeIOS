@@ -22,6 +22,10 @@ Naming a new module after a concept not listed here requires adding the term in 
 - **TOS player** — the WKWebView-hosted YouTube IFrame embed player (`TOSPlayerViewModel`),
   default on iOS since ADR-0006. "TOS" = terms-of-service-compliant (YouTube's own player, not a
   stream-extraction pipeline).
+- **TOS compliance boundary** (ADR-0010) — the embed keeps YouTube's own controls and branding
+  (`controls=1`), the app never hides/obscures/replaces them, media options come from YouTube's
+  own menu, and the only native overlay is app navigation plus SponsorBlock UI. Native chrome
+  and SponsorBlock are suppressed while `ad-showing` is set.
 - **AVPlayer path** — the non-TOS playback path: resolve a raw stream URL, hand it to AVPlayer.
   Still used on tvOS and for some iOS Shorts cases.
 - **Shorts embed player** — the WKWebView/iframe pipeline specifically for Shorts

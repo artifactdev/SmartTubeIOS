@@ -2,8 +2,9 @@
 
 # TOS Player — Development Worklog
 
-macOS-only YouTube IFrame embed player (`TOSPlayerView` / `TOSPlayerViewModel`).
-Activated when `Settings → Use TOS Player on Mac` is enabled.
+YouTube IFrame embed player (`TOSPlayerView` / `TOSPlayerViewModel`) on iOS and macOS.
+On iOS it is the default player (ADR-0006); on macOS it is enabled through
+`Settings → Use TOS Player on Mac`.
 
 ---
 
@@ -52,6 +53,22 @@ YouTube iframe DOM  →  stateDetectionJS  →  window.__nativeYTCallback.postMe
                                           →  TOSPlayerView (SwiftUI) + XCUITest
 ```
 
+**Compliance boundary (ADR-0010)**
+`TOSEmbedURL` always loads the embed with YouTube's own chrome (`controls=1`). The app
+never injects CSS or DOM changes that hide, dim, resize, disable or replace YouTube's
+controls, branding or ad surface. Native SwiftUI over the embed is limited to app
+navigation (back/minimize, speed, more) and SponsorBlock UI. Quality, captions and audio
+tracks are chosen in YouTube's own settings menu: the TOS path does not call InnerTube
+`/player`, `fetchCaptionTracks`, `getPlayerResponse`, `adaptiveFormats` or `movie_player`
+option APIs.
+
+**Ads**
+The embed reports `ad-showing` on every tick. `TOSPlayerViewModel.isAd` suppresses the
+native back/speed/more cluster, the SponsorBlock toasts and the brightness/volume HUD, and
+`checkSponsorSkip` refuses to seek or show a toast while an ad is playing. There is no
+hider in the full player, so no ad frame can be hidden; the guarantees are structural, not
+polling-dependent.
+
 **Fallback**
 If `playerError.isFatal` (error 100/101/150/153), `TOSPlayerView` calls `onFallback()`.
 `MainSidebarView` sets `tosPlayerFallbackVideoId = video.id`, which switches that video
@@ -71,6 +88,8 @@ to the standard `PlayerView`. The guard clears when a different video is opened.
 | `didCommit` (not `didFinish`) for `navfinished` | `didFinish` waits for all subframes; the YouTube iframe may not finish if error 153 loops. `didCommit` fires as soon as the main HTML document is committed |
 | `startIfNeeded()` guard (`hasStartedLoading`) | SwiftUI calls `View.init()` many times per render cycle, creating and discarding `State(initialValue:)` values. Only the instance that appears in view hierarchy calls `startIfNeeded()` |
 | `#if os(macOS)` around `TOSPlayerView` in RootView | `TOSPlayerView` and `TOSPlayerViewModel` are macOS-only; iOS build would fail without the guard |
+| `controls=1` and no injected hider (ADR-0010) | Embedded-player policy and App Review 5.2.3: YouTube's controls and branding must stay visible and unobscured. Compliance is structural — there is no hider to race an ad flag |
+| Media options via YouTube's own menu | Keeps the TOS path free of `movie_player` option APIs, `getPlayerResponse` and InnerTube `/player` caption fetches |
 
 ---
 

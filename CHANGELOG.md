@@ -4,6 +4,16 @@ All notable changes to SmartTube are documented here.
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **TOS player keeps YouTube's native chrome** — the embed always loads with `controls=1`, and the app no longer hides, obscures or replaces YouTube's player, controls or branding. Quality, captions and audio-track selection use YouTube's own settings menu; the TOS path no longer calls InnerTube `/player`, `fetchCaptionTracks`, `getPlayerResponse` or `movie_player` option APIs (ADR-0010)
+
+### Fixed
+- **Ads are never hidden or covered** — native player chrome, the brightness/volume HUD and SponsorBlock toasts are suppressed while the embed reports `ad-showing`, and SponsorBlock refuses to seek or show a toast during an ad
+
+---
+
 ## [4.5] – 2026-06-11
 
 ### Added

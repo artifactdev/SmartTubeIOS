@@ -73,6 +73,10 @@ final class TOSPlayerViewModel: NSObject {
     var currentTime: Double = 0
     var duration: Double = 0
     var isReady: Bool = false
+    /// True while YouTube is showing an ad. Read from the embed's `ad-showing`
+    /// class every tick. Native chrome and SponsorBlock UI are suppressed while
+    /// set so nothing SmartTube draws can cover or replace an ad frame.
+    var isAd: Bool = false
     /// Single in-flight history-session resolution; tick callbacks can arrive rapidly.
     var trackingSessionTask: Task<Void, Never>?
     /// Last time tracking-URL resolution came back empty; gates retries in
@@ -719,18 +723,9 @@ final class TOSPlayerViewModel: NSObject {
         // and the WKWebsiteDataStore cookie set is overwrite-by-name+domain+path,
         // so redoing it is a harmless no-op, but it's a wasted ~10-20ms of
         // dispatch-group round-tripping for the IFrame.
-        var comps = URLComponents(string: "https://www.youtube.com/embed/\(videoId)")!
-        comps.queryItems = [
-            URLQueryItem(name: "autoplay", value: "1"),
-            URLQueryItem(name: "mute", value: "1"),
-            URLQueryItem(name: "controls", value: "1"),
-            URLQueryItem(name: "playsinline", value: "1"),
-            URLQueryItem(name: "rel", value: "0"),
-            URLQueryItem(name: "iv_load_policy", value: "3"),
-            URLQueryItem(name: "start", value: "\(Int(startTime))"),
-            URLQueryItem(name: "origin", value: "https://www.example.com"),
-        ]
-        let embedURL = comps.url!
+        // Kept in one place so the compliance test can assert that the TOS
+        // embed never turns YouTube's native controls off. See ADR-0010.
+        let embedURL = TOSEmbedURL.make(videoId: videoId, startTime: startTime)
         tosLog.notice("[loadEmbed] loading \(embedURL)")
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
@@ -998,7 +993,13 @@ final class TOSPlayerViewModel: NSObject {
                     postMsg({type: 'pollUnmuted', t: t, retriesLeft: _bgRemutePollRetries, muted: video.muted});
                 }
 
-                postMsg({type: 'tick', t: t, state: s, duration: video.duration || 0});
+                // Ad state is reported on every tick so native chrome and
+                // SponsorBlock UI can stand down before drawing anything over
+                // an ad frame. This only reads the class; nothing is hidden.
+                var _player = document.getElementById('movie_player');
+                var _ad = !!(_player && _player.classList.contains('ad-showing'));
+
+                postMsg({type: 'tick', t: t, state: s, duration: video.duration || 0, ad: _ad});
 
                 if (s !== _prevState) {
                     _prevState = s;
