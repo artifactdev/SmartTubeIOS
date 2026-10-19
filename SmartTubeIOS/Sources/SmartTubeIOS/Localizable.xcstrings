@@ -4617,6 +4617,9 @@
         }
       }
     },
+    "Clear Watch History on This Device" : {
+
+    },
     "Close" : {
       "comment" : "tvOS sheet dismiss button",
       "extractionState" : "manual",
@@ -26036,6 +26039,9 @@
           }
         }
       }
+    },
+    "Watch history is saved on this device. SmartTube also tries to report watches to your YouTube account, but YouTube may not always record them." : {
+
     },
     "Watched threshold: %lld%%" : {
 

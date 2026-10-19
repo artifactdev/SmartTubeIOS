@@ -241,12 +241,30 @@ public struct SettingsView: View {
             Text("General")
         } footer: {
             Text(
-                "Watch history is saved on this device. SmartTube can't add videos to your YouTube account's watch history, so videos watched here won't appear on youtube.com or in the YouTube app."
+                "Watch history is saved on this device. SmartTube also tries to report watches to your YouTube account, but YouTube may not always record them."
             )
         }
     }
 
     // MARK: - UI
+
+    private enum ThumbnailStyle: Hashable {
+        case standard, highResolution, compact
+    }
+
+    /// UI-only view over the two independent `compactThumbnails` / `highResThumbnails` flags.
+    private var thumbnailStyle: Binding<ThumbnailStyle> {
+        Binding(
+            get: {
+                if store.settings.compactThumbnails { return .compact }
+                return store.settings.highResThumbnails ? .highResolution : .standard
+            },
+            set: { style in
+                store.settings.compactThumbnails = style == .compact
+                store.settings.highResThumbnails = style == .highResolution
+            }
+        )
+    }
 
     private var uiSection: some View {
         @Bindable var store = store
@@ -257,6 +275,35 @@ public struct SettingsView: View {
                 }
             }
             .accessibilityIdentifier("settings.themeRow")
+            Picker("Accent Color", selection: $store.settings.accentColor) {
+                ForEach(AppSettings.AccentColorChoice.allCases, id: \.self) { choice in
+                    Label {
+                        Text(choice.displayName)
+                    } icon: {
+                        choice.swatch
+                    }
+                    .tag(choice)
+                }
+            }
+            .accessibilityIdentifier("settings.accentColorPicker")
+            Picker("Thumbnails", selection: thumbnailStyle) {
+                Text("Standard").tag(ThumbnailStyle.standard)
+                Text("High Resolution").tag(ThumbnailStyle.highResolution)
+                Text("Compact").tag(ThumbnailStyle.compact)
+            }
+            .accessibilityIdentifier("settings.thumbnailStylePicker")
+            #if !os(tvOS)
+            Picker("Columns (Portrait)", selection: $store.settings.gridColumnsPortrait) {
+                ForEach(AppSettings.availableGridColumnCounts, id: \.self) { Text("\($0)").tag($0) }
+            }
+            .disabled(store.settings.compactThumbnails)
+            .accessibilityIdentifier("settings.gridColumnsPortraitPicker")
+            Picker("Columns (Landscape)", selection: $store.settings.gridColumnsLandscape) {
+                ForEach(AppSettings.availableGridColumnCounts, id: \.self) { Text("\($0)").tag($0) }
+            }
+            .disabled(store.settings.compactThumbnails)
+            .accessibilityIdentifier("settings.gridColumnsLandscapePicker")
+            #endif
             Toggle("Hide Shorts", isOn: $store.settings.hideShorts)
                 .accessibilityIdentifier("settings.hideShortsToggle")
             Toggle("Hide Live Shorts", isOn: $store.settings.hideLiveShorts)
@@ -265,15 +312,24 @@ public struct SettingsView: View {
                 .accessibilityIdentifier("settings.hideVideoPremieresToggle")
             Toggle("Per-Device Recommendations", isOn: $store.settings.perDeviceRecommendationsEnabled)
                 .accessibilityIdentifier("settings.perDeviceRecommendationsToggle")
-            Toggle("Compact Thumbnails", isOn: $store.settings.compactThumbnails)
             Toggle("Hide Watched Videos", isOn: $store.settings.hideWatchedVideos)
                 .accessibilityIdentifier("settings.hideWatchedVideosToggle")
             if store.settings.hideWatchedVideos {
+                #if os(tvOS)
+                // tvOS has no Stepper.
+                Picker("Watched threshold", selection: $store.settings.hideWatchedThreshold) {
+                    ForEach(Array(stride(from: 50, through: 100, by: 5)), id: \.self) { percent in
+                        Text("\(percent)%").tag(Double(percent) / 100)
+                    }
+                }
+                .accessibilityIdentifier("settings.hideWatchedThresholdStepper")
+                #else
                 Stepper(
                     "Watched threshold: \(Int(store.settings.hideWatchedThreshold * 100))%",
                     value: $store.settings.hideWatchedThreshold, in: 0.5...1.0, step: 0.05
                 )
                 .accessibilityIdentifier("settings.hideWatchedThresholdStepper")
+                #endif
             }
             #if os(iOS)
             if #available(iOS 26.0, *) {
@@ -365,7 +421,7 @@ public struct SettingsView: View {
             Text("Experimental")
         } footer: {
             Text(
-                "Uses YouTube's official embedded player instead of the direct stream pipeline. Quality selection and downloads are unavailable. Ads will play. Useful for videos that refuse to play via the standard path."
+                "Uses YouTube's official embedded player instead of the direct stream pipeline. Quality selection is unavailable. Ads will play. Useful for videos that refuse to play via the standard path."
             )
         }
     }
@@ -483,34 +539,61 @@ struct SectionsSettingsView: View {
 
     private let allSections = BrowseSection.allSections
 
+    /// #156: visible sections in the user's own order (drag-to-reorder below), each
+    /// resolved back to its `BrowseSection` for a title/icon.
+    private var visibleSections: [BrowseSection] {
+        store.settings.enabledSections.compactMap { type in allSections.first { $0.type == type } }
+    }
+
+    private var hiddenSections: [BrowseSection] {
+        allSections.filter { !store.settings.enabledSections.contains($0.type) }
+    }
+
     var body: some View {
         @Bindable var store = store
         List {
-            ForEach(allSections) { section in
-                Toggle(
-                    section.title,
-                    isOn: Binding(
-                        get: { store.settings.enabledSections.contains(section.type) },
-                        set: { enabled in
-                            if enabled {
-                                if !store.settings.enabledSections.contains(section.type) {
-                                    // Insert in canonical order
-                                    let ordered =
-                                        allSections
-                                        .filter {
-                                            store.settings.enabledSections.contains($0.type) || $0.type == section.type
-                                        }
-                                        .map { $0.type }
-                                    store.settings.enabledSections = ordered
-                                }
-                            } else {
-                                // Don't allow disabling the last section
-                                if store.settings.enabledSections.count > 1 {
-                                    store.settings.enabledSections.removeAll { $0 == section.type }
-                                }
+            Section {
+                ForEach(visibleSections) { section in
+                    HStack {
+                        Text(section.title)
+                        Spacer()
+                        Button {
+                            // Don't allow disabling the last section.
+                            guard store.settings.enabledSections.count > 1 else { return }
+                            store.settings.enabledSections.removeAll { $0 == section.type }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.red)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(store.settings.enabledSections.count <= 1)
+                    }
+                }
+                .onMove { offsets, destination in
+                    store.settings.enabledSections.move(fromOffsets: offsets, toOffset: destination)
+                }
+            } header: {
+                Text("Visible — drag to reorder")
+            }
+
+            if !hiddenSections.isEmpty {
+                Section("Hidden") {
+                    ForEach(hiddenSections) { section in
+                        Button {
+                            // Append to the end of the user's current order, rather than
+                            // recomputing from canonical order, so re-enabling a section
+                            // doesn't discard any reordering already done above.
+                            store.settings.enabledSections.append(section.type)
+                        } label: {
+                            HStack {
+                                Text(section.title).foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: "plus.circle.fill").foregroundStyle(.green)
                             }
                         }
-                    ))
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
         .navigationTitle("Visible Sections")

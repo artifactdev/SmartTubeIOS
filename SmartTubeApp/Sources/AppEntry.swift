@@ -4,6 +4,9 @@ import SmartTubeIOS
 import SmartTubeIOSCore
 import SwiftUI
 import os
+#if os(iOS)
+import CoreSpotlight
+#endif
 
 /// Unified entry point for iOS, iPadOS and macOS.
 @main
@@ -29,7 +32,9 @@ struct AppEntry: App {
     @State private var channelDeepLinkConsumed = false
     @State private var queueInjectConsumed = false
     /// Shared download service for video cards. See SmartTubeIOS/RootView.swift.
+    #if ENABLE_DOWNLOADS
     @State private var cardDownloadService: VideoDownloadService
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @State private var watchLaterAlert: WatchLaterAlert?
@@ -68,7 +73,8 @@ struct AppEntry: App {
         let api = InnerTubeAPI(authToken: nil, poTokenProvider: poTokenProvider)
         _api = State(initialValue: api)
         _authService = State(initialValue: AuthService())
-        _browseViewModel = State(initialValue: BrowseViewModel(api: api))
+        let browseViewModel = BrowseViewModel(api: api)
+        _browseViewModel = State(initialValue: browseViewModel)
         _settingsStore = State(initialValue: settingsStore)
         #if os(iOS)
         let playerStateStore = PlayerStateStore(api: api)
@@ -82,7 +88,15 @@ struct AppEntry: App {
                 settingsStore: settingsStore
             ))
         #endif
+        #if ENABLE_DOWNLOADS
         _cardDownloadService = State(initialValue: VideoDownloadService(api: api))
+        #endif
+        #if os(iOS)
+        // Task #353: keep the Home Screen widget's snapshot in step with the Home page.
+        HomeWidgetPublisher.attach(to: browseViewModel)
+        // Player-control App Intents (play/pause, skip, next) act on these stores.
+        PlayerRemote.attach(playerState: playerStateStore, tosState: tosPlayerStateStore)
+        #endif
 
         // --uitesting-force-stream-method=<method>: restricts exhaustiveRetry to a
         // single named stream-fetching client.  Written here (main thread, before any
@@ -135,7 +149,9 @@ struct AppEntry: App {
                 .environment(browseViewModel)
                 .environment(settingsStore)
                 .environment(\.innerTubeAPI, api)
+                #if ENABLE_DOWNLOADS
                 .environment(cardDownloadService)
+                #endif
                 .onChange(of: authService.accessToken, initial: true) { _, newToken in
                     Task {
                         await api.setAuthToken(newToken)
@@ -178,6 +194,7 @@ struct AppEntry: App {
                 .environment(authService)
                 .environment(browseViewModel)
                 .environment(settingsStore)
+                .tint(settingsStore.settings.accentColor.color)
                 .frame(minWidth: 480)
         }
         #elseif os(tvOS)
@@ -189,7 +206,9 @@ struct AppEntry: App {
                 .environment(browseViewModel)
                 .environment(settingsStore)
                 .environment(\.innerTubeAPI, api)
+                #if ENABLE_DOWNLOADS
                 .environment(cardDownloadService)
+                #endif
                 .onChange(of: authService.accessToken, initial: true) { _, newToken in
                     Task {
                         await api.setAuthToken(newToken)
@@ -220,14 +239,18 @@ struct AppEntry: App {
                     .environment(settingsStore)
                     .environment(\.innerTubeAPI, api)
                     .environment(playerStateStore)
+                    #if ENABLE_DOWNLOADS
                     .environment(cardDownloadService)
+                    #endif
             } else {
                 RootView()
                     .environment(authService)
                     .environment(browseViewModel)
                     .environment(settingsStore)
                     .environment(\.innerTubeAPI, api)
+                    #if ENABLE_DOWNLOADS
                     .environment(cardDownloadService)
+                    #endif
                     #if os(iOS)
                 .environment(playerStateStore)
                 .environment(tosPlayerStateStore)
@@ -261,6 +284,27 @@ struct AppEntry: App {
                         }
                     }
                     .onOpenURL { url in handleOpenURL(url) }
+                    #if os(iOS)
+                    // Spotlight: tapping a video or channel result opens it.
+                    .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                        guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+                            let route = SpotlightIndexer.route(forIdentifier: id)
+                        else { return }
+                        handleOpenURL(route.url)
+                    }
+                    // Spotlight: recently watched videos (removed when history is off or cleared)
+                    // and subscribed channels (removed on sign-out).
+                    .onChange(of: LocalWatchHistoryStore.shared.entries.map(\.video.id), initial: true) { _, _ in
+                        syncSpotlightHistory()
+                    }
+                    .onChange(of: settingsStore.settings.historyState) { _, _ in syncSpotlightHistory() }
+                    .onChange(of: browseViewModel.subscribedChannels) { _, channels in
+                        if !channels.isEmpty { SpotlightIndexer.shared.syncChannels(channels) }
+                    }
+                    .onChange(of: authService.isSignedIn) { _, signedIn in
+                        if !signedIn { SpotlightIndexer.shared.syncChannels([]) }
+                    }
+                    #endif
                     .onChange(of: scenePhase, initial: true) { _, phase in
                         if phase == .active {
                             consumePendingVideoID()
@@ -309,16 +353,68 @@ struct AppEntry: App {
 
     @MainActor
     private func handleOpenURL(_ url: URL) {
-        // Supports smarttube://video/VIDEO_ID (fired by the Share Extension) and
-        // smarttube://watch?v=VIDEO_ID (mirrors YouTube's own watch URL query param,
-        // for Shortcuts/browser-address-bar links built by hand) — see
-        // SmartTubeURLScheme.videoID(from:) for the parsing (#84).
-        guard let videoID = SmartTubeURLScheme.videoID(from: url) else { return }
-        // Use video ID as placeholder title during UI testing so player.titleLabel
-        // has non-empty text and is visible to XCTest in the AX tree from the moment
-        // the player opens, before the API call returns the real title.
-        let isUITesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
-        browseViewModel.deepLinkedVideo = Video(id: videoID, title: isUITesting ? videoID : "", channelTitle: "")
+        // smarttube://video/ID and smarttube://watch?v=ID come from the Share Extension, the
+        // widget and hand-built links (#84); the other routes from App Intents and Spotlight.
+        // See SmartTubeRoute for the full list.
+        guard let route = SmartTubeRoute(url: url) else { return }
+        os.Logger(subsystem: "com.void.smarttube.app", category: "DeepLink")
+            .notice("handleOpenURL \(url.absoluteString, privacy: .public)")
+        switch route {
+        case .video(let videoID):
+            // Use video ID as placeholder title during UI testing so player.titleLabel
+            // has non-empty text and is visible to XCTest in the AX tree from the moment
+            // the player opens, before the API call returns the real title.
+            let isUITesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
+            openVideo(Video(id: videoID, title: isUITesting ? videoID : "", channelTitle: ""))
+        case .channel(let channelID):
+            leaveFullScreenPlayer()
+            NotificationCenter.default.post(
+                name: Notification.Name("com.smarttube.openChannel"), object: nil,
+                userInfo: ["channelId": channelID, "channelTitle": ""])
+        case .search(let query):
+            leaveFullScreenPlayer()
+            NotificationCenter.default.post(name: .smartTubeOpenSearch, object: nil, userInfo: ["query": query])
+        case .section(let type):
+            leaveFullScreenPlayer()
+            NotificationCenter.default.post(name: .smartTubeOpenSection, object: nil, userInfo: ["section": type.rawValue])
+        case .playWatchLater:
+            Task { @MainActor in
+                // Needs a signed-in account; otherwise show the Watch Later section, which
+                // explains that.
+                guard let first = try? await api.fetchPlaylistVideos(playlistId: "WL").videos.first else {
+                    handleOpenURL(SmartTubeRoute.section(.watchLater).url)
+                    return
+                }
+                var video = first
+                video.playlistId = "WL"
+                video.playlistIndex = 0
+                openVideo(video)
+            }
+        case .continueWatching:
+            // The player resumes from the saved position (VideoStateStore).
+            if let last = LocalWatchHistoryStore.shared.videos.first {
+                openVideo(last)
+            } else {
+                handleOpenURL(SmartTubeRoute.section(.history).url)
+            }
+        }
+    }
+
+    @MainActor
+    private func openVideo(_ video: Video) {
+        #if os(iOS)
+        // While a full-screen player is up, UIKit has removed the main SwiftUI view from the
+        // window and its updates are paused, so MainTabView's onChange(of: deepLinkedVideo)
+        // would not run until the player closed: a widget / Share Extension link opened
+        // while watching did nothing. Route straight to the player instead.
+        if playerStateStore.presentation == .fullScreen || tosPlayerStateStore.presentation == .fullScreen {
+            playerRouter.open(video: video, api: api)
+        } else {
+            browseViewModel.deepLinkedVideo = video
+        }
+        #else
+        browseViewModel.deepLinkedVideo = video
+        #endif
 
         // Clear the App Group pending key so consumePendingVideoID() does not replay
         // this video on the next cold start. When the app is already active, scenePhase
@@ -328,6 +424,24 @@ struct AppEntry: App {
             defaults.removeObject(forKey: Self.pendingKey)
             defaults.synchronize()
         }
+    }
+
+    #if os(iOS)
+    @MainActor
+    private func syncSpotlightHistory() {
+        let enabled = settingsStore.settings.historyState == .enabled
+        SpotlightIndexer.shared.syncHistory(enabled ? LocalWatchHistoryStore.shared.videos : [])
+    }
+    #endif
+
+    /// Search, section and channel routes navigate the tabs underneath the player, so a
+    /// full-screen player shrinks to the mini player (playback continues).
+    @MainActor
+    private func leaveFullScreenPlayer() {
+        #if os(iOS)
+        if tosPlayerStateStore.presentation == .fullScreen { tosPlayerStateStore.minimize() }
+        if playerStateStore.presentation == .fullScreen { playerStateStore.minimize() }
+        #endif
     }
 
     // MARK: - App Group pending video (from Share Extension)

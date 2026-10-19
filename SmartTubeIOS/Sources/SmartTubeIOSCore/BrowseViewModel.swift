@@ -49,11 +49,15 @@ public final class BrowseViewModel {
     /// A video to open immediately via deeplink / URL interception.
     /// Cleared by the UI after the player is presented.
     public var deepLinkedVideo: Video?
+    /// Called with the Home page's videos after each successful Home load (empty when
+    /// signed out). The iOS app uses it to refresh the Home Screen widget (task #353).
+    @ObservationIgnored public var onHomeLoaded: (@MainActor ([Video]) -> Void)?
 
     // MARK: - Dependencies
 
     private let api: any InnerTubeAPIProtocol
     private let localHistory: LocalWatchHistoryStore
+    private let watchLaterMembership: WatchLaterMembershipStore
     private var fetchTask: Task<Void, Never>?
     private var enrichTask: Task<Void, Never>?
     /// When `false`, the History section returns empty content rather than fetching from YouTube.
@@ -73,9 +77,11 @@ public final class BrowseViewModel {
 
     public init(
         api: any InnerTubeAPIProtocol = InnerTubeAPI(), initialSection: BrowseSection? = nil,
-        localHistory: LocalWatchHistoryStore = .shared
+        localHistory: LocalWatchHistoryStore = .shared,
+        watchLaterMembership: WatchLaterMembershipStore = .shared
     ) {
         self.localHistory = localHistory
+        self.watchLaterMembership = watchLaterMembership
         self.api = api
         if let initial = initialSection {
             // Ensure the initial section appears in the picker list.
@@ -99,6 +105,13 @@ public final class BrowseViewModel {
             })
         hideObserverTasks.append(
             Task { [weak self] in
+                for await note in NotificationCenter.default.notifications(named: .watchLaterDidChange) {
+                    guard let self, let videoId = note.userInfo?["videoId"] as? String else { continue }
+                    self.applyWatchLaterChange(videoId: videoId, added: note.userInfo?["added"] as? Bool ?? false)
+                }
+            })
+        hideObserverTasks.append(
+            Task { [weak self] in
                 for await note in NotificationCenter.default.notifications(named: .hideChannelFromFeed) {
                     guard let self, let channelId = note.userInfo?["channelId"] as? String else { continue }
                     self.removeChannel(id: channelId)
@@ -109,6 +122,24 @@ public final class BrowseViewModel {
     public func removeVideo(id: String) {
         for i in videoGroups.indices {
             videoGroups[i].videos.removeAll { $0.id == id }
+        }
+    }
+
+    /// Keeps an open Watch Later section in step with adds/removes made in this app, instead
+    /// of waiting for a refresh (and YouTube's index) — #157.
+    func applyWatchLaterChange(videoId: String, added: Bool) {
+        guard currentSection.type == .watchLater else { return }
+        if !added {
+            removeVideo(id: videoId)
+            return
+        }
+        guard let video = watchLaterMembership.savedVideo(videoId),
+            !videoGroups.contains(where: { $0.videos.contains { $0.id == videoId } })
+        else { return }
+        if videoGroups.isEmpty {
+            videoGroups = [VideoGroup(title: BrowseSection.SectionType.watchLater.defaultTitle, videos: [video])]
+        } else {
+            videoGroups[0].videos.insert(video, at: 0)
         }
     }
 
@@ -339,6 +370,9 @@ public final class BrowseViewModel {
                     }.filter { !$0.videos.isEmpty }
                     videoGroups = dedupedRows
                 }
+                // Signed out, Home shows a sign-in prompt over a "popular" search fallback;
+                // the widget gets nothing (and clears) rather than those search results.
+                onHomeLoaded?(isAuthRequired ? [] : videoGroups.flatMap(\.videos))
             }
 
         case .recommended:
@@ -423,9 +457,8 @@ public final class BrowseViewModel {
                 }
                 return
             }
-            // #150: SmartTube can't write to the YouTube account's history (no web
-            // session cookies from device-code sign-in), so the app keeps its own
-            // on-device history and shows it first, followed by whatever the account
+            // #150: YouTube doesn't reliably credit watches to the account for device-code
+            // sign-in, so the app keeps its own on-device history and shows it first, followed by whatever the account
             // history returns (best-effort — signed-out/failed fetches just yield local).
             let local = localHistory.videos
             let remote: VideoGroup? = try? await api.fetchHistory()
@@ -517,7 +550,21 @@ public final class BrowseViewModel {
                     videoGroups = []
                 }
             } else {
-                let group = try await api.fetchPlaylistVideos(playlistId: "WL", continuationToken: nil)
+                var group = try await api.fetchPlaylistVideos(playlistId: "WL", continuationToken: nil)
+                // #157: a video just added via this app can be momentarily missing here —
+                // YouTube's own playlist index doesn't always reflect an add immediately, so even
+                // an explicit pull-to-refresh right after saving can race it. One short delayed
+                // re-fetch covers that window. Only *recent* saves count: the persisted membership
+                // set is never pruned and only this first page is compared, so using it would add
+                // a delay + second fetch to every load for anyone with an old or deep entry.
+                let justSaved = watchLaterMembership.recentlySaved(within: 120)
+                let fetchedIds = Set(group.videos.map(\.id))
+                if !justSaved.isEmpty, !justSaved.isSubset(of: fetchedIds), !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    if !Task.isCancelled {
+                        group = try await api.fetchPlaylistVideos(playlistId: "WL", continuationToken: nil)
+                    }
+                }
                 if !Task.isCancelled {
                     isAuthRequired = false
                     var stamped = group
@@ -526,6 +573,12 @@ public final class BrowseViewModel {
                         video.playlistId = "WL"
                         return video
                     }
+                    // Saves YouTube still hasn't indexed after the retry are shown on top from
+                    // what this app saved, so they don't seem lost until a later refresh.
+                    let present = Set(stamped.videos.map(\.id))
+                    let missing = watchLaterMembership.recentlySavedVideos(within: 15 * 60)
+                        .filter { !present.contains($0.id) }
+                    stamped.videos.insert(contentsOf: missing, at: 0)
                     videoGroups = stamped.videos.isEmpty ? [] : [stamped]
                 }
             }

@@ -24,6 +24,7 @@ public struct ChannelView: View {
     @Environment(SettingsStore.self) private var store
     @Environment(AuthService.self) private var auth
     @Environment(\.innerTubeAPI) private var api
+    @Environment(\.isLandscapeLayout) private var isLandscapeLayout
     #if os(iOS)
     @Environment(PlayerRouter.self) private var playerRouter
     #endif
@@ -205,7 +206,10 @@ public struct ChannelView: View {
                 }
                 .padding()
                 #else
-                LazyVGrid(columns: videoGridColumns, spacing: videoGridRowSpacing) {
+                LazyVGrid(
+                    columns: videoGridColumns(store.settings, landscape: isLandscapeLayout),
+                    spacing: videoGridRowSpacing
+                ) {
                     ForEach(videos) { video in
                         VideoCardView(video: video, compact: false)
                             .accessibilityIdentifier("video.card.\(video.id)")
@@ -221,6 +225,7 @@ public struct ChannelView: View {
                             }
                     }
                 }
+                .id(isLandscapeLayout)  // reset on column-count change — see VideoGridSection (#82)
                 .padding()
                 #endif
             }

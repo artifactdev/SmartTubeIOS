@@ -505,6 +505,22 @@ extension InnerTubeAPI {
             return nil
         }
 
+        // #157: the playlist-entry token InnerTube uses to identify *this occurrence* of the
+        // video within a playlist (distinct from the video ID itself — a playlist can hold the
+        // same video more than once). WEB's playlistVideoRenderer exposes it as a top-level
+        // `setVideoId` (see parsePlaylistVideoRenderer below); the TV client's tileRenderer only
+        // has it nested inside the watch endpoint as `playlistSetVideoId`. Without this, removal
+        // from an authenticated playlist fetch (e.g. the Home page's Watch Later section, which
+        // goes through the TV client) always fails with "Missing playlist entry information",
+        // since VideoCardView's remove action requires `Video.setVideoId`.
+        // The exact location in TV responses is unverified against live data, so after the
+        // watch endpoint, fall back to a bounded search of the whole tile — e.g. a "Remove
+        // from Watch later" menu item's playlistEditEndpoint action carries `setVideoId`.
+        let setVideoId =
+            watchEndpoint?["playlistSetVideoId"] as? String
+            ?? reelWatchEndpoint?["playlistSetVideoId"] as? String
+            ?? Self.findPlaylistEntryToken(in: tile)
+
         // title: metadata.tileMetadataRenderer.title — Android: TileItem.getTitle()
         let tileMetadata = (tile["metadata"] as? [String: Any])?["tileMetadataRenderer"] as? [String: Any]
         let title = (tileMetadata?["title"] as? [String: Any]).flatMap { extractText($0) } ?? ""
@@ -714,8 +730,29 @@ extension InnerTubeAPI {
             isUpcoming: isUpcoming,
             isShort: isShort,
             watchProgress: watchProgress,
+            setVideoId: setVideoId,
             badges: []
         )
+    }
+
+    /// Depth-limited search for a playlist-entry token (`playlistSetVideoId` or `setVideoId`)
+    /// anywhere in a renderer dictionary. Both keys only ever identify a playlist entry, so the
+    /// first string value found is the entry this renderer represents.
+    static func findPlaylistEntryToken(in value: Any, depth: Int = 0) -> String? {
+        guard depth < 12 else { return nil }
+        if let dict = value as? [String: Any] {
+            for key in ["playlistSetVideoId", "setVideoId"] {
+                if let token = dict[key] as? String, !token.isEmpty { return token }
+            }
+            for child in dict.values {
+                if let token = findPlaylistEntryToken(in: child, depth: depth + 1) { return token }
+            }
+        } else if let array = value as? [Any] {
+            for child in array {
+                if let token = findPlaylistEntryToken(in: child, depth: depth + 1) { return token }
+            }
+        }
+        return nil
     }
 
     // MARK: – WEB lockupViewModel parser (Android LockupItem methodology)

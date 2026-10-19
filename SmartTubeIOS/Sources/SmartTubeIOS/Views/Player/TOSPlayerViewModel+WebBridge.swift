@@ -32,6 +32,11 @@ extension TOSPlayerViewModel {
         }
 
         switch type {
+        case "surfaceTap":
+            guard let visible = json["controlsVisible"] as? Bool else { return }
+            surfaceTapControlsVisible = visible
+            surfaceTapRevision += 1
+
         case "ping":
             tosLog.notice("[ytCallback] JS<->Swift bridge ping received")
             CFNotificationCenterPostNotification(
@@ -41,6 +46,13 @@ extension TOSPlayerViewModel {
             )
 
         case "ready":
+            // UI testing (#158): simulate YouTube's "Sign in to confirm you're not a bot"
+            // check, which needs a flagged IP to reproduce for real.
+            if playerError == nil,
+                ProcessInfo.processInfo.arguments.contains("--uitesting-simulate-signin-required")
+            {
+                playerError = .signInRequired
+            }
             // CAPTURE the embed iframe's frame info — exactly once, from the message
             // GUARANTEED to originate inside it: `stateDetectionJS` only posts "ready"
             // after `document.querySelector('video')` actually found the `<video>`
@@ -184,6 +196,7 @@ extension TOSPlayerViewModel {
                 setDurationIfNewlyKnown(tickDuration)
             }
             let newState = YTPlayerState(raw: s)
+            if newState == .playing { checkpointIfDue() }
             if !hasReceivedFirstTick {
                 hasReceivedFirstTick = true
                 tosLog.notice("[ytCallback] first tick — state=\(s) t=\(t, format: .fixed(precision: 2))s")
@@ -263,6 +276,9 @@ extension TOSPlayerViewModel {
             case 153:
                 errName = "player-config-error"
                 playerError = .iframeError(code)
+            case -2:
+                errName = "sign-in-required"
+                playerError = .signInRequired
             default:
                 errName = "unknown(\(code))"
                 playerError = .iframeError(code)

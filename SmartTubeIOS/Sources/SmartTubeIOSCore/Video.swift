@@ -179,6 +179,16 @@ public extension Video {
         [sdThumbnailURL, highQualityThumbnailURL, mqThumbnailURL].compactMap { $0 }
     }
 
+    /// 1280×720; only exists when the video was uploaded in HD (404 otherwise).
+    var maxResThumbnailURL: URL? {
+        URL(string: "https://i.ytimg.com/vi/\(id)/maxresdefault.jpg")
+    }
+
+    /// Fallbacks after `maxResThumbnailURL`: hq720 (1280×720, 16:9) → standard chain.
+    var highResThumbnailFallbackURLs: [URL] {
+        [URL(string: "https://i.ytimg.com/vi/\(id)/hq720.jpg")].compactMap { $0 } + thumbnailFallbackURLs
+    }
+
     /// Portrait (9:16) thumbnail used for Shorts cards.
     /// YouTube generates `oardefault.jpg` (360×640) for every Short.
     var portraitThumbnailURL: URL? {

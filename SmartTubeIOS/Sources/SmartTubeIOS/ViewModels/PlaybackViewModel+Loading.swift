@@ -133,7 +133,8 @@ extension PlaybackViewModel {
                 flushPosition: 0, flushDuration: 0)
         }
 
-        // #150: on-device history (the YouTube account can't be written to).
+        // #150: on-device history, kept alongside the account reporting (which YouTube
+        // doesn't always credit for device-code sign-in).
         if settings.historyState == .enabled {
             LocalWatchHistoryStore.shared.record(video)
         }

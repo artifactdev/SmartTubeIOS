@@ -45,7 +45,9 @@ public struct VideoCardView: View {
     /// Index into `video.thumbnailFallbackURLs`. -1 = use primary `thumbnailURL`.
     @State private var thumbnailFallbackIndex: Int = -1
     #if !os(tvOS)
+    #if ENABLE_DOWNLOADS
     @Environment(VideoDownloadService.self) private var downloadService
+    #endif
     #endif
     #if os(tvOS)
     @FocusState private var isFocused: Bool
@@ -176,7 +178,12 @@ public struct VideoCardView: View {
                         // video ID — see InnerTubeAPI+Social.swift's removeFromWatchLater (#122).
                         // It's only populated when this card came from browsing the WL playlist
                         // itself, which is the only place this button is shown.
-                        guard let setVideoId = video.setVideoId else {
+                        // A video saved this session may be listed before YouTube indexed it,
+                        // without its own token; use the one returned when it was saved.
+                        guard
+                            let setVideoId = video.setVideoId
+                                ?? WatchLaterMembershipStore.shared.setVideoId(for: video.id)
+                        else {
                             watchLaterAlert = DownloadAlertItem(
                                 title: String(localized: "Could Not Remove", bundle: .module),
                                 message: String(
@@ -209,8 +216,8 @@ public struct VideoCardView: View {
                     Button {
                         Task {
                             do {
-                                try await api.addToWatchLater(videoId: video.id)
-                                WatchLaterMembershipStore.shared.markSaved(video.id)
+                                let setVideoId = try await api.addToWatchLater(videoId: video.id)
+                                WatchLaterMembershipStore.shared.markSaved(video, setVideoId: setVideoId)
                                 watchLaterAlert = DownloadAlertItem(
                                     title: String(localized: "Saved to Watch Later", bundle: .module),
                                     message: String(
@@ -298,7 +305,7 @@ public struct VideoCardView: View {
                     }
                 }
             }
-            #if !os(tvOS)
+            #if !os(tvOS) && ENABLE_DOWNLOADS
             Button {
                 downloadService.download(video: video)
             } label: {
@@ -465,6 +472,12 @@ public struct VideoCardView: View {
             }
             .padding(.horizontal, 2)
         }
+        // #153: without an explicit content shape, SwiftUI's default hit-test area for this
+        // compound view can leave gaps (the VStack spacing, padding) untappable — invisible on
+        // iOS/tvOS where touches are more forgiving, but very noticeable with a precise mouse
+        // pointer on macOS. The caller (VideoGridSection) attaches its whole-card tap gesture
+        // externally, so it needs this view's own hit-test region to cover its full frame.
+        .contentShape(Rectangle())
     }
 
     // MARK: Compact (list) layout
@@ -515,6 +528,7 @@ public struct VideoCardView: View {
             }
             Spacer(minLength: 0)
         }
+        .contentShape(Rectangle())  // #153: see gridLayout's doc comment
     }
 
     // MARK: Shared
@@ -539,14 +553,22 @@ public struct VideoCardView: View {
             systemPlaylistThumbnail
         } else {
             // Walk a fallback chain on each successive failure:
-            //   -1 → deArrowThumbnailURL (community thumbnail) or thumbnailURL (API-provided)
+            //   -1 → deArrowThumbnailURL (community thumbnail), else maxresdefault.jpg when
+            //        High Resolution is on, else thumbnailURL (API-provided)
+            //    (High Resolution only: hq720.jpg, then the standard chain below)
             //    0 → sddefault.jpg  (640×480, available for most videos)
             //    1 → hqdefault.jpg  (480×360, always available)
             //    2 → mqdefault.jpg  (320×180, always available — last resort)
-            let fallbacks = video.thumbnailFallbackURLs
+            // High-res URLs are built from `/vi/<id>/`, so they only make sense for real
+            // videos: playlist placeholder cards (Playlists section: id == playlistId) would
+            // walk the whole chain against a playlist ID and end on a grey placeholder, and
+            // Shorts would swap their portrait thumbnail for a landscape one.
+            let highRes =
+                store.settings.highResThumbnails && video.playlistId != video.id && !video.isShort
+            let fallbacks = highRes ? video.highResThumbnailFallbackURLs : video.thumbnailFallbackURLs
             let url: URL? =
                 thumbnailFallbackIndex < 0
-                ? (deArrowThumbnailURL ?? video.thumbnailURL ?? fallbacks.first)
+                ? (deArrowThumbnailURL ?? (highRes ? video.maxResThumbnailURL : video.thumbnailURL) ?? fallbacks.first)
                 : (thumbnailFallbackIndex < fallbacks.count ? fallbacks[thumbnailFallbackIndex] : nil)
             AsyncImage(url: url) { phase in
                 switch phase {

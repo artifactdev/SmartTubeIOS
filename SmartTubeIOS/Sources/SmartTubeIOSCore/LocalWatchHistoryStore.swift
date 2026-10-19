@@ -3,10 +3,10 @@ import Observation
 
 // MARK: - LocalWatchHistoryStore (#150, task #346)
 //
-// SmartTube's sign-in (Google device-code flow) yields no YouTube *web* session cookies,
-// so playback pings are not credited to the account's real YouTube history (see open task
-// #293 for the rejected/alternative designs). Rather than pretend otherwise, the app keeps
-// its own on-device history: every video that starts playing (outside Incognito, with
+// SmartTube's sign-in (Google device-code flow) yields no YouTube *web* session cookies, so
+// YouTube doesn't reliably credit playback to the account's real history even with the
+// account-bound tracking added in PR #152 (see task #293 for alternatives). So the app also
+// keeps its own on-device history: every video that starts playing (outside Incognito, with
 // Watch History enabled) is recorded here and shown at the top of the History tab.
 // Nothing here talks to YouTube.
 

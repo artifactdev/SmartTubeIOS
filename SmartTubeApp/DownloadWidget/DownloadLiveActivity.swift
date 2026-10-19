@@ -3,6 +3,8 @@ import SwiftUI
 import WidgetKit
 import SmartTubeIOSCore
 
+// Downloading is compiled out (App Store guideline 5.2.3). Define ENABLE_DOWNLOADS to build it.
+#if ENABLE_DOWNLOADS
 // MARK: - DownloadLiveActivity
 //
 // Live Activity widget displayed in the Dynamic Island and on the Lock Screen
@@ -125,41 +127,7 @@ private extension DownloadActivityAttributes.DownloadContentState.Phase {
     }
 }
 
-// MARK: - Placeholder widget (required by WidgetKit)
-//
-// A WidgetKit extension containing only ActivityConfiguration (Live Activity)
-// has no descriptors enumerable by SpringBoard, causing:
-//   SBAvocadoDebuggingControllerErrorDomain "Failed to get descriptors for extensionBundleID"
-// Adding a minimal StaticConfiguration satisfies the requirement.
-
-@available(iOS 16.1, *)
-private struct DownloadPlaceholderWidget: Widget {
-    static let kind = "DownloadPlaceholderWidget"
-
-    var body: some WidgetConfiguration {
-        StaticConfiguration(kind: Self.kind, provider: PlaceholderProvider()) { _ in
-            EmptyView()
-                .containerBackground(.fill.tertiary, for: .widget)
-        }
-        .configurationDisplayName("SmartTube Download")
-        .description("Shows download progress in the Dynamic Island.")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
-    }
-}
-
-@available(iOS 16.1, *)
-private struct PlaceholderProvider: TimelineProvider {
-    func placeholder(in context: Context) -> PlaceholderEntry { PlaceholderEntry() }
-    func getSnapshot(in context: Context, completion: @escaping (PlaceholderEntry) -> Void) { completion(PlaceholderEntry()) }
-    func getTimeline(in context: Context, completion: @escaping (Timeline<PlaceholderEntry>) -> Void) {
-        completion(Timeline(entries: [PlaceholderEntry()], policy: .never))
-    }
-}
-
-@available(iOS 16.1, *)
-private struct PlaceholderEntry: TimelineEntry {
-    let date = Date()
-}
+#endif  // ENABLE_DOWNLOADS
 
 // MARK: - Widget Bundle entry point
 
@@ -167,7 +135,11 @@ private struct PlaceholderEntry: TimelineEntry {
 @main
 struct SmartTubeDownloadWidgetBundle: WidgetBundle {
     var body: some Widget {
-        DownloadPlaceholderWidget()
+        // A widget extension needs at least one StaticConfiguration widget, or SpringBoard
+        // fails with "Failed to get descriptors for extensionBundleID". The Home widget is it.
+        HomeFeedWidget()
+        #if ENABLE_DOWNLOADS
         DownloadLiveActivityWidget()
+        #endif
     }
 }

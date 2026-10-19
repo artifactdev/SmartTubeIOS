@@ -24,9 +24,7 @@ struct ChannelDestination: Identifiable, Hashable {
 
 // MARK: - Shared layout constants
 
-/// Adaptive grid columns used for video grids across Browse and Channel views.
 /// tvOS: fixed 4 columns (flexible) — predictable across all TV sizes.
-/// iOS: adaptive, ~2 columns on iPhone.
 #if os(tvOS)
 let videoGridColumns = [
     GridItem(.flexible(), spacing: 40),
@@ -36,19 +34,79 @@ let videoGridColumns = [
 ]
 let videoGridRowSpacing: CGFloat = 40
 #else
-let videoGridColumns = [GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 12)]
-/// Explicit column layouts for iOS — used in VideoGridSection to avoid the rotation
-/// hit-test mismatch caused by adaptive columns recalculating after device rotation.
-/// Compact (iPhone portrait): 2 equal-width columns.
-let compactVideoGridColumns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
-/// Regular (iPad or iPhone landscape): 3 equal-width columns.
-let regularVideoGridColumns = [
-    GridItem(.flexible(), spacing: 12),
-    GridItem(.flexible(), spacing: 12),
-    GridItem(.flexible(), spacing: 12),
-]
 let videoGridRowSpacing: CGFloat = 12
+
+/// Fixed (not adaptive) columns avoid the rotation hit-test mismatch of issue #82.
+func videoGridColumns(_ settings: AppSettings, landscape: Bool) -> [GridItem] {
+    let count = landscape ? settings.gridColumnsLandscape : settings.gridColumnsPortrait
+    return Array(repeating: GridItem(.flexible(), spacing: videoGridRowSpacing), count: count)
+}
 #endif
+
+// MARK: - Layout orientation
+
+private struct IsLandscapeLayoutKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// `true` when the root window is wider than tall; set by `RootView`.
+    var isLandscapeLayout: Bool {
+        get { self[IsLandscapeLayoutKey.self] }
+        set { self[IsLandscapeLayoutKey.self] = newValue }
+    }
+}
+
+// MARK: - Accent color
+
+extension AppSettings.AccentColorChoice {
+    /// `nil` falls back to the `AccentColor` asset.
+    public var color: Color? {
+        switch self {
+        case .system: return nil
+        case .red: return .red
+        case .orange: return .orange
+        case .yellow: return .yellow
+        case .green: return .green
+        case .mint: return .mint
+        case .teal: return .teal
+        case .blue: return .blue
+        case .indigo: return .indigo
+        case .purple: return .purple
+        case .pink: return .pink
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .system: return String(localized: "Default", bundle: .module)
+        case .red: return String(localized: "Red", bundle: .module)
+        case .orange: return String(localized: "Orange", bundle: .module)
+        case .yellow: return String(localized: "Yellow", bundle: .module)
+        case .green: return String(localized: "Green", bundle: .module)
+        case .mint: return String(localized: "Mint", bundle: .module)
+        case .teal: return String(localized: "Teal", bundle: .module)
+        case .blue: return String(localized: "Blue", bundle: .module)
+        case .indigo: return String(localized: "Indigo", bundle: .module)
+        case .purple: return String(localized: "Purple", bundle: .module)
+        case .pink: return String(localized: "Pink", bundle: .module)
+        }
+    }
+
+    /// Pre-tinted, because Picker menus re-tint template images with the current accent.
+    var swatch: Image {
+        #if canImport(UIKit)
+        let tint = color.map { UIColor($0) } ?? UIColor(named: "AccentColor") ?? .systemBlue
+        let base = UIImage(systemName: AppSymbol.colorSwatch) ?? UIImage()
+        return Image(uiImage: base.withTintColor(tint, renderingMode: .alwaysOriginal))
+        #else
+        let tint = color.map { NSColor($0) } ?? NSColor(named: "AccentColor") ?? .systemBlue
+        let base = NSImage(systemSymbolName: AppSymbol.colorSwatch, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [tint]))
+        return Image(nsImage: base ?? NSImage())
+        #endif
+    }
+}
 
 // MARK: - DownloadAlertItem
 
@@ -99,6 +157,7 @@ enum AppSymbol {
     static let clock = "clock"
     static let questionCircle = "questionmark.circle"
     static let qrcode = "qrcode"
+    static let colorSwatch = "circle.fill"
 
     // MARK: - People / account
     static let personCircle = "person.crop.circle"

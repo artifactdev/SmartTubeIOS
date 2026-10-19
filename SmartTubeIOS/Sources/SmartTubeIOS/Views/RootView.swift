@@ -16,8 +16,11 @@ public struct RootView: View {
     @Environment(\.innerTubeAPI) private var api
     /// Shared download service — observed here so the completion alert is shown
     /// at a stable level unaffected by context menu dismiss animations on cards.
+    #if ENABLE_DOWNLOADS
     @Environment(VideoDownloadService.self) private var cardDownloadService
+    #endif
     @State private var cardDownloadAlertItem: DownloadAlertItem?
+    @State private var isLandscapeLayout = false
 
     public init() {}
 
@@ -27,7 +30,9 @@ public struct RootView: View {
         // @Observable tracking engine registers this view as a subscriber.
         // Without this, onChange(of: cardDownloadService.state) may not fire
         // when the state changes on an environment-injected @Observable object.
+        #if ENABLE_DOWNLOADS
         let _ = cardDownloadService.state
+        #endif
         Group {
             #if os(tvOS)
             MainTVTabView()
@@ -37,8 +42,11 @@ public struct RootView: View {
             MainTabView()
             #endif
         }
+        .environment(\.isLandscapeLayout, isLandscapeLayout)
+        .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { isLandscapeLayout = $0 }
+        .tint(store.settings.accentColor.color)
         .preferredColorScheme(store.settings.themeName.colorScheme)
-        #if !os(tvOS)
+        #if !os(tvOS) && ENABLE_DOWNLOADS
         .onChange(of: cardDownloadService.state) { _, newState in
             switch newState {
             case .done:
@@ -211,6 +219,17 @@ struct MainTabView: View {
             selectedTab = .search
         }
         #if os(iOS)
+        // App Intents / Spotlight (see AppEntry.handleOpenURL).
+        .onReceive(NotificationCenter.default.publisher(for: .smartTubeOpenSearch)) { note in
+            guard let query = note.userInfo?["query"] as? String else { return }
+            selectedTab = .search
+            searchVM.query = query
+            searchVM.search()
+        }
+        // HomeView picks the section itself (it owns the chip selection).
+        .onReceive(NotificationCenter.default.publisher(for: .smartTubeOpenSection)) { _ in
+            selectedTab = .home
+        }
         // Reserve vertical space so scrollable tab content is not hidden under the
         // mini player. Uses a transparent placeholder rather than the real MiniPlayerView
         // to avoid duplicating the PersistentPlayerHostView UIKit layer across tabs.
@@ -271,6 +290,15 @@ struct MainTabView: View {
         // from frame 1.
         .landscapePlayerCover(item: tosFullScreenBinding, dismissStore: tosState) { video in
             TOSPlayerView(video: video, api: api) {
+                // #158: YouTube's bot check asks to sign in inside the embed, which can't
+                // work there. The standard player plays with the app's own sign-in, so
+                // this one error still falls back to it on iOS.
+                if tosState.vm?.playerError == .signInRequired {
+                    rootLog.notice("[RootView] TOS sign-in required for videoId=\(video.id) — opening the standard player")
+                    tosState.markFallback(videoId: video.id)
+                    playerRouter.open(video: video, api: api)
+                    return
+                }
                 rootLog.notice(
                     "[RootView] TOS onFallback for videoId=\(video.id) — AVPlayer disabled, not routing away. User must close + re-tap to retry."
                 )

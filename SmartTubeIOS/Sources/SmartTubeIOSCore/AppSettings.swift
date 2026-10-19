@@ -45,6 +45,8 @@ public struct AppSettings: Codable {
     // MARK: UI
     public var defaultSection: String
     public var compactThumbnails: Bool
+    /// Loads 1280×720 CDN thumbnails instead of the smaller API-provided ones.
+    public var highResThumbnails: Bool
     /// #121: hides videos from Home/Subscriptions once their watched fraction
     /// (`Video.watchProgress`, YouTube's own resume-progress signal) reaches
     /// `hideWatchedThreshold`. History is deliberately never filtered by this —
@@ -75,6 +77,11 @@ public struct AppSettings: Codable {
     /// When `false`, the token is cleared and YouTube returns its default shared feed.
     public var perDeviceRecommendationsEnabled: Bool
     public var themeName: ThemeName
+    public var accentColor: AccentColorChoice
+    /// Video grid column count when the window is taller than wide (ignored on tvOS).
+    public var gridColumnsPortrait: Int
+    /// Video grid column count when the window is wider than tall (ignored on tvOS).
+    public var gridColumnsLandscape: Int
     /// Ordered list of section types visible in the sidebar/tab bar.
     /// When empty, all default sections are shown.
     public var enabledSections: [BrowseSection.SectionType]
@@ -192,6 +199,13 @@ public struct AppSettings: Codable {
     /// Canonical ordered list of selectable seek-interval values (seconds) — used by Stepper on iOS and Picker on tvOS.
     public static let availableSeekOptions: [Int] = [5, 10, 15, 20, 30, 45, 60]
 
+    public static let availableGridColumnCounts: ClosedRange<Int> = 1...3
+
+    /// `.system` keeps the `AccentColor` asset from the app bundle.
+    public enum AccentColorChoice: String, Codable, CaseIterable, Sendable {
+        case system, red, orange, yellow, green, mint, teal, blue, indigo, purple, pink
+    }
+
     public enum VideoQuality: String, Codable, CaseIterable, Sendable {
         case auto = "auto"
         case q2160 = "2160p"
@@ -259,6 +273,7 @@ public struct AppSettings: Codable {
         queueShuffleEnabled = false
         defaultSection = BrowseSection.SectionType.home.rawValue
         compactThumbnails = false
+        highResThumbnails = false
         hideWatchedVideos = false
         hideWatchedThreshold = 0.9
         disableLiquidGlass = false
@@ -269,6 +284,9 @@ public struct AppSettings: Codable {
         hideVideoPremieres = false
         perDeviceRecommendationsEnabled = true
         themeName = .system
+        accentColor = .system
+        gridColumnsPortrait = 2
+        gridColumnsLandscape = 3
         enabledSections = BrowseSection.defaultSections.map(\.type)
         historyState = .enabled
         sponsorBlockEnabled = true
@@ -344,6 +362,7 @@ extension AppSettings {
         case queueShuffleEnabled
         case defaultSection
         case compactThumbnails
+        case highResThumbnails
         case hideWatchedVideos
         case hideWatchedThreshold
         case disableLiquidGlass
@@ -354,6 +373,9 @@ extension AppSettings {
         case hideVideoPremieres
         case perDeviceRecommendationsEnabled
         case themeName
+        case accentColor
+        case gridColumnsPortrait
+        case gridColumnsLandscape
         case enabledSections
         case historyState
         case sponsorBlockEnabled
@@ -393,6 +415,7 @@ extension AppSettings {
         queueShuffleEnabled = c.safeDecode(Bool.self, forKey: .queueShuffleEnabled, default: d.queueShuffleEnabled)
         defaultSection = c.safeDecode(String.self, forKey: .defaultSection, default: d.defaultSection)
         compactThumbnails = c.safeDecode(Bool.self, forKey: .compactThumbnails, default: d.compactThumbnails)
+        highResThumbnails = c.safeDecode(Bool.self, forKey: .highResThumbnails, default: d.highResThumbnails)
         hideWatchedVideos = c.safeDecode(Bool.self, forKey: .hideWatchedVideos, default: d.hideWatchedVideos)
         hideWatchedThreshold = c.safeDecode(
             Double.self, forKey: .hideWatchedThreshold, default: d.hideWatchedThreshold)
@@ -405,6 +428,14 @@ extension AppSettings {
         perDeviceRecommendationsEnabled = c.safeDecode(
             Bool.self, forKey: .perDeviceRecommendationsEnabled, default: d.perDeviceRecommendationsEnabled)
         themeName = c.safeDecode(ThemeName.self, forKey: .themeName, default: d.themeName)
+        accentColor = c.safeDecode(AccentColorChoice.self, forKey: .accentColor, default: d.accentColor)
+        let columns = Self.availableGridColumnCounts
+        gridColumnsPortrait = min(
+            max(c.safeDecode(Int.self, forKey: .gridColumnsPortrait, default: d.gridColumnsPortrait), columns.lowerBound),
+            columns.upperBound)
+        gridColumnsLandscape = min(
+            max(c.safeDecode(Int.self, forKey: .gridColumnsLandscape, default: d.gridColumnsLandscape), columns.lowerBound),
+            columns.upperBound)
         enabledSections = c.safeDecode(
             [BrowseSection.SectionType].self, forKey: .enabledSections, default: d.enabledSections)
         historyState = c.safeDecode(HistoryState.self, forKey: .historyState, default: d.historyState)

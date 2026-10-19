@@ -121,6 +121,18 @@ public struct HomeView: View {
             guard let channelId = note.userInfo?["channelId"] as? String, !channelId.isEmpty else { return }
             channelDestination = ChannelDestination(channelId: channelId)
         }
+        #if os(iOS)
+        // App Intents ("Open Subscriptions in SmartTube"): RootView switches to this tab.
+        // A section hidden in Settings still opens, just without a chip.
+        .onReceive(NotificationCenter.default.publisher(for: .smartTubeOpenSection)) { note in
+            guard let raw = note.userInfo?["section"] as? String,
+                let type = BrowseSection.SectionType(rawValue: raw)
+            else { return }
+            selectedSection =
+                visibleSections.first { $0.type == type }
+                ?? BrowseSection(id: type.rawValue, title: type.defaultTitle, type: type)
+        }
+        #endif
         .onChange(of: visibleSections) { _, newSections in
             if !newSections.contains(selectedSection), let first = newSections.first {
                 selectedSection = first
@@ -170,14 +182,21 @@ public struct HomeView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.chipBar")
         #else
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(visibleSections) { section in
-                    chipButton(section: section)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(visibleSections) { section in
+                        chipButton(section: section).id(section.id)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            // Keep the selected chip in view when the section changes by swipe (#159) or
+            // App Intent, not by tapping the chip.
+            .onChange(of: selectedSection) { _, section in
+                withAnimation { proxy.scrollTo(section.id, anchor: .center) }
+            }
         }
         .accessibilityIdentifier("home.chipBar")
         #endif
@@ -187,11 +206,9 @@ public struct HomeView: View {
         let isSelected = selectedSection == section
         let action = {
             let isNewSection = selectedSection != section
-            if isNewSection { selectedSection = section }
-            guard section.type != .home else { return }
             if isNewSection {
-                sectionVM.select(section: section)
-            } else if sectionVM.videoGroups.isEmpty && !sectionVM.isLoading {
+                select(section)
+            } else if section.type != .home, sectionVM.videoGroups.isEmpty && !sectionVM.isLoading {
                 // Same chip re-tapped on an empty section — retry the load.
                 // This handles failed fetches or cases where an observation gap
                 // left the view showing an empty state despite data being available.
@@ -246,6 +263,32 @@ public struct HomeView: View {
         #endif
     }
 
+    private func select(_ section: BrowseSection) {
+        selectedSection = section
+        if section.type != .home { sectionVM.select(section: section) }
+    }
+
+    #if os(iOS)
+    // MARK: - Swipe between sections (#159)
+
+    /// A clearly sideways swipe over the feed moves to the next / previous chip. Attached
+    /// only to the vertical feeds, not the horizontal Shorts row, whose own scrolling would
+    /// otherwise also change the section.
+    private var sectionSwipe: some Gesture {
+        DragGesture(minimumDistance: 30)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > 80, abs(dx) > abs(dy) * 2 else { return }
+                let sections = visibleSections
+                guard let index = sections.firstIndex(of: selectedSection) else { return }
+                let next = index + (dx < 0 ? 1 : -1)
+                guard sections.indices.contains(next) else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { select(sections[next]) }
+            }
+    }
+    #endif
+
     // MARK: - Content area
 
     @ViewBuilder
@@ -276,6 +319,9 @@ public struct HomeView: View {
             ChannelListView(channels: sectionVM.subscribedChannels) { channel in
                 channelDestination = ChannelDestination(channelId: channel.id)
             }
+            #if os(iOS)
+            .simultaneousGesture(sectionSwipe)
+            #endif
         }
     }
 
@@ -291,6 +337,10 @@ public struct HomeView: View {
                 .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        #if os(iOS)
+        .simultaneousGesture(sectionSwipe)
+        #endif
     }
 
     // MARK: - Home shelves  (unified interleaved feed)
@@ -332,6 +382,9 @@ public struct HomeView: View {
                         }
                     }
                     .refreshable { homeVM.load() }
+                    #if os(iOS)
+                    .simultaneousGesture(sectionSwipe)
+                    #endif
                     #if os(tvOS)
                     .focusSection()
                     #endif
@@ -578,6 +631,9 @@ public struct HomeView: View {
                 }
                 .accessibilityIdentifier("home.sectionFeed")
                 .refreshable { sectionVM.loadContent(refresh: true) }
+                #if os(iOS)
+                .simultaneousGesture(sectionSwipe)
+                #endif
                 #if os(tvOS)
                 .focusSection()
                 #endif
@@ -724,6 +780,10 @@ public struct HomeView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        #if os(iOS)
+        .simultaneousGesture(sectionSwipe)
+        #endif
     }
 
     // MARK: - Video selection

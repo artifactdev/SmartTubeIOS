@@ -92,8 +92,8 @@ public struct TOSPlayerView: View {
 
     #if os(iOS)
     /// Controls (back button, speed, more) are hidden on initial load and auto-hide
-    /// after `controlsHideDelay` seconds when shown. A tap anywhere on the player
-    /// reveals them; they auto-hide again after the delay.
+    /// after `controlsHideDelay` seconds when shown. Video-surface taps toggle
+    /// them together with the embedded player controls without changing playback.
     @State private var controlsVisible = false
     @State private var controlsHideTask: Task<Void, Never>? = nil
     private let controlsHideDelay: Double = 4
@@ -277,18 +277,9 @@ public struct TOSPlayerView: View {
                     TOSSwipeNavigationOverlay(
                         onSwipeLeft: { vm.playNext() },
                         onSwipeRight: { vm.playPrevious() },
-                        onTap: { _ in
-                            // #111 history: we tried to undo YouTube's tap-to-pause so that
-                            // tapping to reveal controls wouldn't also pause playback. But the
-                            // undo misfired on the user's first *intentional* pause (controls
-                            // were hidden, user tapped to both show controls and pause — our
-                            // code saw controlsWereVisible=false and undid it). Letting
-                            // YouTube's native tap = toggle-play/pause stand is the correct
-                            // behaviour: it matches YouTube's own app and is what users expect.
-                            showControls()
-                        },
                         onVerticalDragChanged: { isLeftHalf, translationY, viewHeight in
-                            handleVerticalDrag(isLeftHalf: isLeftHalf, translationY: translationY, viewHeight: viewHeight)
+                            handleVerticalDrag(
+                                isLeftHalf: isLeftHalf, translationY: translationY, viewHeight: viewHeight)
                         },
                         onVerticalDragEnded: {
                             endVerticalDrag()
@@ -378,8 +369,12 @@ public struct TOSPlayerView: View {
                 // player (the iOS default since 4.6) never registers in YouTube's
                 // watch history — same root cause already fixed for PlaybackViewModel
                 // in PlayerView+Lifecycle.swift, never ported to TOS.
-                vm.updateAuthToken(authService.accessToken)
-                vm.updateSAPISID(authService.sapisid)
+                let accessToken = authService.accessToken
+                let sapisid = authService.sapisid
+                Task { @MainActor in
+                    await vm.prepareAuthentication(token: accessToken, sapisid: sapisid)
+                    vm.startIfNeeded()
+                }
                 // The IFrame load is deferred to YouTubeWebPlayerView's window-ready
                 // callback (see UIViewRepresentable Coordinator in this file), which
                 // fires once the WKWebView is in a key window after the cover-present
@@ -390,12 +385,11 @@ public struct TOSPlayerView: View {
                 // inside the view model, which isn't subject to view-lifecycle
                 // cancellation. startIfNeeded() (without "WhenWindowReady") is a
                 // no-op fallback kept for safety in case the callback is missed.
-                vm.startIfNeeded()
                 #if os(iOS)
                 // Show controls briefly on first appear so the back button is tappable
                 // without the user having to tap the player area first. The 4s auto-hide
                 // in showControls() then fades them out. Subsequent reveals happen via
-                // the TOSSwipeNavigationOverlay tap or on videoId change.
+                // the embedded player's surface-tap message or on videoId change.
                 showControls()
                 UIDevice.current.beginGeneratingDeviceOrientationNotifications()
                 let physicallyLandscape = UIDevice.current.orientation.isLandscape
@@ -487,6 +481,14 @@ public struct TOSPlayerView: View {
                 onFallback()
             }
             #if os(iOS)
+            .onChange(of: vm.surfaceTapRevision) { _, _ in
+                if vm.surfaceTapControlsVisible {
+                    showControls()
+                } else {
+                    controlsHideTask?.cancel()
+                    withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
+                }
+            }
             // Show controls briefly whenever a new video loads via swipe navigation
             // (tosState.vm is replaced by TOSPlayerStateStore.play). Without this the
             // controls stay hidden if the user swiped while they were already hidden.
@@ -925,9 +927,13 @@ public struct TOSPlayerView: View {
         Task {
             let ok = await vm.reportIncorrectSegment(segment)
             reportSegmentAlert = DownloadAlertItem(
-                title: ok ? String(localized: "Reported", bundle: .module) : String(localized: "Could Not Report", bundle: .module),
+                title: ok
+                    ? String(localized: "Reported", bundle: .module)
+                    : String(localized: "Could Not Report", bundle: .module),
                 message: ok
-                    ? String(localized: "Thanks for the feedback — this segment has been reported to SponsorBlock.", bundle: .module)
+                    ? String(
+                        localized: "Thanks for the feedback — this segment has been reported to SponsorBlock.",
+                        bundle: .module)
                     : String(localized: "The report couldn't be sent. Please try again later.", bundle: .module)
             )
         }
