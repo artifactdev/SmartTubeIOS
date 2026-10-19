@@ -1134,7 +1134,8 @@ final class TOSPlayerViewModel: NSObject {
 
             function apply() {
                 var hide = _wanted && !hasAd();
-                if (hide === _applied) return;
+                var existing = document.getElementById('st-mini-chrome-style');
+                if (hide === _applied && (!hide || (existing && existing.isConnected))) return;
                 var style = ensureStyle();
                 if (style) { style.textContent = hide ? HIDE_CSS : ''; }
                 _applied = hide;
