@@ -44,6 +44,10 @@ enum TOSPlayerError: Equatable {
     /// #158). The embed only has the TV session cookies, and Google sign-in can't complete
     /// inside it, so the standard player (authenticated InnerTube) takes over.
     case signInRequired
+    /// The embed's own player response says the video is unplayable here — most commonly
+    /// channel-members-only content (the YouTube iframe has no channel-membership session),
+    /// but also region blocks, removed videos, etc. Carries YouTube's localized reason.
+    case unavailable(String)
 
     var isFatal: Bool {
         switch self {
@@ -89,6 +93,10 @@ final class TOSPlayerViewModel: NSObject {
     var scrubTime: Double = 0
     var bufferedRanges: [ClosedRange<Double>] = []
     var seekableRanges: [ClosedRange<Double>] = []
+    /// True only while the embedded player reports a live broadcast. Set from the
+    /// embed's player response (`liveBroadcastDetails.isLiveNow` / `videoDetails.isLive`),
+    /// never from `video.duration` — an ended broadcast keeps an Infinity/duration
+    /// signal in the TV embed. Drives the LIVE label and the non-scrubable bar.
     var isLive: Bool = false
     var isAd: Bool = false
     /// Incremented on every play/pause request so a late verification play
@@ -1060,7 +1068,24 @@ final class TOSPlayerViewModel: NSObject {
                 return out;
             }
 
+            // Report the embed's own playability verdict once, so Swift can show
+            // YouTube's localized reason (e.g. "available to channel members only")
+            // instead of a silent black screen. Only posted once per page.
+            var _playabilityPosted = false;
+            function reportPlayability() {
+                if (_playabilityPosted) return;
+                var p = document.getElementById('movie_player');
+                if (!p || typeof p.getPlayerResponse !== 'function') return;
+                var pr = null;
+                try { pr = p.getPlayerResponse(); } catch (e) { return; }
+                var ps = pr && pr.playabilityStatus;
+                if (!ps || !ps.status) return;
+                _playabilityPosted = true;
+                postMsg({type: 'playability', status: ps.status, reason: ps.reason || ''});
+            }
+
             function pollVideo() {
+                reportPlayability();
                 var video = document.querySelector('video');
                 if (!video) return;
                 hookVideo(video);
@@ -1092,10 +1117,23 @@ final class TOSPlayerViewModel: NSObject {
 
                 var t = video.currentTime || 0;
 
-                var _live = !isFinite(video.duration);
+                // Live state for the native LIVE affordance. Prefer the player
+                // response (reliable for ended broadcasts: isLiveNow=false) and
+                // fall back to the Infinity-duration heuristic only when the embed
+                // exposes neither signal. `video.duration` is Infinity for an
+                // ongoing broadcast; JSON.stringify would turn that into null, so
+                // clamp it to 0.
+                var _live = null;
+                try {
+                    if (window.__stPlayerAPI && typeof window.__stPlayerAPI.getLive === 'function') {
+                        _live = window.__stPlayerAPI.getLive();
+                    }
+                } catch (e) { _live = null; }
+                if (_live !== true && _live !== false) { _live = !isFinite(video.duration); }
+                var _dur = isFinite(video.duration) ? (video.duration || 0) : 0;
                 if (_prevState === -2) {
                     _prevState = s;
-                    postMsg({type: 'ready', duration: _live ? 0 : (video.duration || 0),
+                    postMsg({type: 'ready', duration: _dur,
                              readyState: video.readyState, buffered: video.buffered.length,
                              live: _live});
                 }
@@ -1167,7 +1205,7 @@ final class TOSPlayerViewModel: NSObject {
 
                 var _mp = document.getElementById('movie_player');
                 var _ad = !!(_mp && _mp.classList.contains('ad-showing'));
-                postMsg({type: 'tick', t: t, state: s, duration: _live ? 0 : (video.duration || 0),
+                postMsg({type: 'tick', t: t, state: s, duration: _dur,
                          buffered: ranges(video.buffered), seekable: ranges(video.seekable),
                          live: _live, ad: _ad, rate: video.playbackRate || 1, muted: !!video.muted});
 

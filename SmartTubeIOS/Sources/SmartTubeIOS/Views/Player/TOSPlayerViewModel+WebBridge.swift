@@ -77,7 +77,8 @@ extension TOSPlayerViewModel {
             isLive = (json["live"] as? Bool) ?? false
             let readyDuration = (json["duration"] as? Double) ?? 0
             if readyDuration > 0 { setDurationIfNewlyKnown(readyDuration) }
-            tosLog.notice("[ytCallback] ready — duration=\(self.duration, format: .fixed(precision: 1))s")
+            tosLog.notice(
+                "[ytCallback] ready — duration=\(self.duration, format: .fixed(precision: 1))s live=\(self.isLive)")
             CFNotificationCenterPostNotification(
                 CFNotificationCenterGetDarwinNotifyCenter(),
                 CFNotificationName("com.void.smarttube.tosplayer.ready" as CFString),
@@ -232,10 +233,13 @@ extension TOSPlayerViewModel {
             // saveProgress()'s `duration <= 0` guard skip the watch-history
             // checkpoint on every dismiss, even with auth working correctly.
             // Refresh from tick too, once a real value is available.
-            if let tickDuration = json["duration"] as? Double, tickDuration > 0, !tickLive {
+            if let tickDuration = json["duration"] as? Double, tickDuration > 0 {
                 setDurationIfNewlyKnown(tickDuration)
             }
             let newState = YTPlayerState(raw: s)
+            if newState != playerState {
+                tosLog.debug("[ytCallback] tick state \(self.playerState.rawValue) → \(s) live=\(tickLive)")
+            }
             if newState == .playing { checkpointIfDue() }
             if !hasReceivedFirstTick {
                 hasReceivedFirstTick = true
@@ -295,6 +299,24 @@ extension TOSPlayerViewModel {
             // none is pending — see PendingSkipLog for why this must happen here, on
             // the next observed tick, rather than synchronously after seekTo()).
             logSkipLanding(at: t)
+
+        case "playability":
+            let status = (json["status"] as? String) ?? ""
+            let reason = (json["reason"] as? String) ?? ""
+            tosLog.notice("[ytCallback] playability status=\(status) reason=\(reason)")
+            // Normal startup states — never surface these.
+            guard status != "OK", status != "LIVE_STREAM_OFFLINE", !status.isEmpty else { return }
+            guard playerError == nil else { return }
+            // Sign-in gates still route to the standard player (see RootView's
+            // onFallback handler); everything else (members-only, region block,
+            // removed) gets an in-player message with YouTube's own reason.
+            let lower = reason.lowercased()
+            let signInKeywords = ["sign in", "not a bot", "age", "18+"]
+            if status == "LOGIN_REQUIRED" || signInKeywords.contains(where: { lower.contains($0) }) {
+                playerError = .signInRequired
+            } else {
+                playerError = .unavailable(reason.isEmpty ? status : reason)
+            }
 
         case "error":
             let code = (json["code"] as? Int) ?? -1

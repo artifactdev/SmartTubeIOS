@@ -104,7 +104,40 @@ enum TOSPlayerMediaOptionsJS {
                 return names;
             }
 
+            // Authoritative live state. `video.duration === Infinity` is NOT a
+            // reliable signal in the TV embed, so read the player response:
+            //   videoDetails.isLive            → true only while live
+            //   liveBroadcastDetails.isLiveNow → true only while live
+            //   isLiveContent                  → true for any broadcast (sticky)
+            // Returns true/false, or null when neither the player response nor
+            // getVideoData() exposes a live flag (caller falls back to duration).
+            function getLive() {
+                var p = player();
+                if (!p) return null;
+                try {
+                    var pr = (typeof p.getPlayerResponse === 'function') ? p.getPlayerResponse() : null;
+                    if (pr) {
+                        var d = pr.videoDetails || {};
+                        if (typeof d.isLive === 'boolean') return d.isLive;
+                        var mf = pr.microformat && pr.microformat.playerMicroformatRenderer;
+                        var lb = mf && mf.liveBroadcastDetails;
+                        if (lb && typeof lb.isLiveNow === 'boolean') return lb.isLiveNow;
+                        if (typeof d.isLiveContent === 'boolean') {
+                            return d.isLiveContent && String(d.lengthSeconds || '0') === '0';
+                        }
+                    }
+                } catch (e) {}
+                try {
+                    if (typeof p.getVideoData === 'function') {
+                        var vd = p.getVideoData();
+                        if (vd && typeof vd.isLive === 'boolean') return vd.isLive;
+                    }
+                } catch (e) {}
+                return null;
+            }
+
             window.__stPlayerAPI = {
+                getLive: getLive,
                 getOptions: function() {
                     var p = player();
                     if (!p) return { supported: false };

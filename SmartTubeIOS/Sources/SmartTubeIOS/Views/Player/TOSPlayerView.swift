@@ -450,6 +450,20 @@ public struct TOSPlayerView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                             .animation(.easeOut(duration: 0.2), value: showChaptersSheet)
                     }
+
+                    // MARK: Playability error (members-only / region / removed)
+                    // The embedded player renders no playable video for these; the
+                    // chrome hider would otherwise leave a silent black screen.
+                    if case .unavailable(let message) = vm.playerError {
+                        unavailableOverlay(message: message) {
+                            #if os(iOS)
+                            tosState.stop()
+                            #else
+                            browseVM.deepLinkedVideo = nil
+                            dismiss()
+                            #endif
+                        }
+                    }
                 }
             }
             // Invisible AX label exposing player state for UI tests.
@@ -987,6 +1001,44 @@ public struct TOSPlayerView: View {
             onDismiss: { showChaptersSheet = false },
             accessibilityId: "tosPlayer.chaptersOverlay"
         )
+    }
+
+    // MARK: - Playability error
+
+    /// Shown when the embedded player reports a non-OK playability status — most
+    /// commonly channel-members-only content (the iframe has no membership session),
+    /// but also region blocks / removed videos. Displays YouTube's own localized
+    /// reason and lets the user close the player.
+    private func unavailableOverlay(message: String, onClose: @escaping () -> Void) -> some View {
+        ZStack {
+            Color.black.opacity(0.85).ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: AppSymbol.warning)
+                    .font(.system(size: 44))
+                    .foregroundStyle(.white)
+                Text("This video can't be played here")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    onClose()
+                } label: {
+                    Text("Close")
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 10)
+                        .background(.white.opacity(0.15), in: Capsule())
+                        .foregroundStyle(.white)
+                }
+                .accessibilityIdentifier("tosPlayer.unavailableCloseButton")
+            }
+            .padding(32)
+        }
+        .accessibilityIdentifier("tosPlayer.unavailableOverlay")
     }
 
     // MARK: - SponsorBlock toast

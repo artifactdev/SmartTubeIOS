@@ -156,6 +156,12 @@ extension TOSPlayerViewModel {
         seekableRanges = seekable
         isLive = live
         isAd = ad
+        // A live broadcast reports an Infinity duration in the embed; the tick's
+        // duration is then 0. Derive the timeline length from the DVR seekable
+        // window so the progress bar has a real scale (and scrubbing works).
+        if live, duration <= 0, let liveEdge = seekable.last?.upperBound, liveEdge > 0 {
+            duration = liveEdge
+        }
     }
 
     /// Decodes the `[[start, end], ...]` arrays sent by `stateDetectionJS`.

@@ -176,7 +176,9 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
                 scrubTime: vm.scrubTime,
                 chapters: vm.chapters,
                 sponsorSegments: vm.sponsorSegments,
-                isLive: vm.isLive,
+                // Live broadcasts are scrubable: the DVR window is the timeline.
+                // The LIVE state is shown by the pill next to the time labels.
+                isLive: false,
                 accessibilityIdentifier: "tosPlayer.progressBar",
                 onBeginScrub: {
                     onInteraction()
@@ -223,15 +225,19 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
                     Text("LIVE")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.red, in: Capsule())
                         .accessibilityIdentifier("tosPlayer.liveLabel")
-                } else {
-                    Text(formatDuration(vm.currentTime))
-                        .accessibilityIdentifier("tosPlayer.currentTimeLabel")
-                    Text("/")
-                        .foregroundStyle(.white.opacity(0.5))
-                    Text(formatDuration(vm.duration))
-                        .accessibilityIdentifier("tosPlayer.durationLabel")
                 }
+                // Always show elapsed / total. For a live broadcast the total is
+                // the DVR edge, i.e. how long the stream has been running.
+                Text(formatDuration(vm.currentTime))
+                    .accessibilityIdentifier("tosPlayer.currentTimeLabel")
+                Text("/")
+                    .foregroundStyle(.white.opacity(0.5))
+                Text(formatDuration(vm.duration))
+                    .accessibilityIdentifier("tosPlayer.durationLabel")
 
                 Spacer()
 
