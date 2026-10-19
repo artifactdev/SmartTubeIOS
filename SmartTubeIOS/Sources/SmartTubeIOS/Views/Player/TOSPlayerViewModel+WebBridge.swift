@@ -105,6 +105,11 @@ extension TOSPlayerViewModel {
                     if self.hasCaptionOptions && self.hasMultipleAudioTracks { return }
                 }
             }
+            // Keep the playlist-gated previous/next transport buttons in sync
+            // with the live Current Queue (it can change while the embed loads).
+            Task { @MainActor [weak self] in
+                await self?.refreshPlaylistVideoCount()
+            }
             // Native captions: fetch InnerTube captionTracks independently of
             // the embed's captions module, which the TV-UA player does not
             // expose reliably. Selecting a track renders via CaptionCueView.

@@ -190,6 +190,35 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
             quickAccessRow
 
             HStack(spacing: 8) {
+                // Playlist-only: hidden entirely unless this video came from the
+                // Current Queue (a playlist). Inside a queue they navigate it
+                // (both disabled for a one-item queue).
+                if vm.isInPlaylist {
+                    PlayerIconButton(
+                        systemName: AppSymbol.previousTrack,
+                        accessibilityIdentifier: "tosPlayer.previousButton",
+                        accessibilityLabel: "Previous video",
+                        iconSize: 24,
+                        isEnabled: vm.canPlayPreviousVideo
+                    ) {
+                        onInteraction()
+                        vm.playPrevious()
+                    }
+                }
+
+                // Chapter jump — always present, disabled when the video has no
+                // chapters or the playhead is at the relevant boundary.
+                PlayerIconButton(
+                    systemName: AppSymbol.previousChapter,
+                    accessibilityIdentifier: "tosPlayer.previousChapterButton",
+                    accessibilityLabel: "Previous chapter",
+                    iconSize: 24,
+                    isEnabled: vm.hasPreviousChapter
+                ) {
+                    onInteraction()
+                    vm.skipToPreviousChapter()
+                }
+
                 if vm.isLive {
                     Text("LIVE")
                         .font(.caption.weight(.bold))
@@ -207,23 +236,27 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
                 Spacer()
 
                 PlayerIconButton(
-                    systemName: AppSymbol.previousTrack,
-                    accessibilityIdentifier: "tosPlayer.previousButton",
-                    accessibilityLabel: "Previous video",
-                    isEnabled: vm.hasPrevious
+                    systemName: AppSymbol.nextChapter,
+                    accessibilityIdentifier: "tosPlayer.nextChapterButton",
+                    accessibilityLabel: "Next chapter",
+                    iconSize: 24,
+                    isEnabled: vm.hasNextChapter
                 ) {
                     onInteraction()
-                    vm.playPrevious()
+                    vm.skipToNextChapter()
                 }
 
-                PlayerIconButton(
-                    systemName: AppSymbol.nextTrack,
-                    accessibilityIdentifier: "tosPlayer.nextButton",
-                    accessibilityLabel: "Next video",
-                    isEnabled: vm.hasNext
-                ) {
-                    onInteraction()
-                    vm.playNext()
+                if vm.isInPlaylist {
+                    PlayerIconButton(
+                        systemName: AppSymbol.nextTrack,
+                        accessibilityIdentifier: "tosPlayer.nextButton",
+                        accessibilityLabel: "Next video",
+                        iconSize: 24,
+                        isEnabled: vm.canPlayNextVideo
+                    ) {
+                        onInteraction()
+                        vm.playNext()
+                    }
                 }
 
                 #if os(iOS)
@@ -245,74 +278,78 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
     }
 
     private var quickAccessRow: some View {
-        HStack(spacing: 8) {
-            PlayerQuickAccessPill(
-                systemImage: "speedometer",
-                label: speedLabel,
-                accessibilityIdentifier: "tosPlayer.speedButton"
-            ) {
-                onInteraction()
-                showSpeedPicker = true
-            }
-
-            if vm.hasQualityOptions {
+        // Horizontal scroll: with speed + quality + captions + audio + sleep all
+        // present the row can exceed the available width, so let the user scroll
+        // it rather than truncating ("Normal" → "No…", "Deutsch" → "De…").
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
                 PlayerQuickAccessPill(
-                    systemImage: "film.stack",
-                    label: vm.qualityLabel,
-                    accessibilityIdentifier: "tosPlayer.qualityButton"
+                    systemImage: "speedometer",
+                    label: speedLabel,
+                    accessibilityIdentifier: "tosPlayer.speedButton"
                 ) {
                     onInteraction()
-                    showQualityPicker = true
+                    showSpeedPicker = true
                 }
-            }
 
-            // Always visible: the pill toggles captions when tracks are known,
-            // and its picker explains the empty state when they are not (so
-            // the control's presence does not depend on the embed API).
-            PlayerQuickAccessPill(
-                systemImage: vm.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
-                label: vm.captionsLabel,
-                accessibilityIdentifier: "tosPlayer.captionsButton"
-            ) {
-                onInteraction()
-                if suppressCaptionTap {
-                    suppressCaptionTap = false
-                    return
+                if vm.hasQualityOptions {
+                    PlayerQuickAccessPill(
+                        systemImage: "film.stack",
+                        label: vm.qualityLabel,
+                        accessibilityIdentifier: "tosPlayer.qualityButton"
+                    ) {
+                        onInteraction()
+                        showQualityPicker = true
+                    }
                 }
-                vm.toggleCaptions()
-            }
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+
+                // Always visible: the pill toggles captions when tracks are known,
+                // and its picker explains the empty state when they are not (so
+                // the control's presence does not depend on the embed API).
+                PlayerQuickAccessPill(
+                    systemImage: vm.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
+                    label: vm.captionsLabel,
+                    accessibilityIdentifier: "tosPlayer.captionsButton"
+                ) {
                     onInteraction()
-                    suppressCaptionTap = true
-                    showCaptionsPicker = true
+                    if suppressCaptionTap {
+                        suppressCaptionTap = false
+                        return
+                    }
+                    vm.toggleCaptions()
                 }
-            )
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                        onInteraction()
+                        suppressCaptionTap = true
+                        showCaptionsPicker = true
+                    }
+                )
 
-            // Always visible, like the CC pill: alternate audio tracks are an
-            // embed capability, so the control is present even when the list
-            // is empty and the picker explains the empty state.
-            PlayerQuickAccessPill(
-                systemImage: "waveform",
-                label: vm.audioTrackLabel,
-                accessibilityIdentifier: "tosPlayer.audioTrackButton"
-            ) {
-                onInteraction()
-                showAudioTrackPicker = true
+                // Always visible, like the CC pill: alternate audio tracks are an
+                // embed capability, so the control is present even when the list
+                // is empty and the picker explains the empty state.
+                PlayerQuickAccessPill(
+                    systemImage: "waveform",
+                    label: vm.audioTrackLabel,
+                    accessibilityIdentifier: "tosPlayer.audioTrackButton"
+                ) {
+                    onInteraction()
+                    showAudioTrackPicker = true
+                }
+
+                PlayerQuickAccessPill(
+                    systemImage: "moon.zzz",
+                    label: sleepTimerLabel,
+                    accessibilityIdentifier: "tosPlayer.sleepTimerButton"
+                ) {
+                    onInteraction()
+                    showSleepTimerPicker = true
+                }
             }
-
-            PlayerQuickAccessPill(
-                systemImage: "moon.zzz",
-                label: sleepTimerLabel,
-                accessibilityIdentifier: "tosPlayer.sleepTimerButton"
-            ) {
-                onInteraction()
-                showSleepTimerPicker = true
-            }
-
-            Spacer(minLength: 0)
+            .padding(.horizontal, 20)
         }
-        .padding(.horizontal, 20)
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     private var speedLabel: String {

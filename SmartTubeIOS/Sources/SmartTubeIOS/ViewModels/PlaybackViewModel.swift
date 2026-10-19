@@ -468,7 +468,9 @@ public final class PlaybackViewModel {
         )
         self.comments = CommentsController(api: api)
 
-        player.allowsExternalPlayback = true
+        // AirPlay is deliberately disabled app-wide — see TOSPlayerViewModel's
+        // `allowsAirPlayForMediaPlayback = false` note.
+        player.allowsExternalPlayback = false
         #if canImport(UIKit)
         do {
             // Only configure the audio category at init time. setActive(true) is

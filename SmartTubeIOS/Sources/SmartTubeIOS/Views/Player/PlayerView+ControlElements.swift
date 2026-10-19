@@ -154,10 +154,6 @@ struct PlayerControlsOverlay: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("player.pipButton")
                 }
-                // AirPlay route picker
-                AirPlayRoutePickerView()
-                    .frame(width: 40, height: 40)
-                    .accessibilityIdentifier("player.airPlayButton")
                 #endif
                 // Share / Download menu
                 #if os(tvOS)
@@ -749,62 +745,67 @@ extension PlayerView {
 extension PlayerControlsOverlay {
 
     @ViewBuilder var quickAccessButtonRow: some View {
-        HStack(spacing: 8) {
-            quickAccessButton(
-                systemImage: "speedometer",
-                label: speedLabel,
-                accessibilityId: "player.quickAccess.speed"
-            ) { showSpeedPicker = true }
-
-            if !vm.isAudioOnlyMode {
+        // Horizontal scroll so pills keep their full labels instead of
+        // truncating when the row is wider than the screen.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
                 quickAccessButton(
-                    systemImage: "film.stack",
-                    label: qualityLabel,
-                    accessibilityId: "player.quickAccess.quality"
-                ) { showQualityPicker = true }
-                .disabled(vm.availableFormats.isEmpty)
-                .opacity(vm.availableFormats.isEmpty ? 0.4 : 1)
-            }
+                    systemImage: "speedometer",
+                    label: speedLabel,
+                    accessibilityId: "player.quickAccess.speed"
+                ) { showSpeedPicker = true }
 
-            // Always visible: tap toggles captions on/off; long-press opens the
-            // language picker. The more menu's Captions row opens the same
-            // picker. `toggleCaptions()` no-ops when no tracks are loaded.
-            quickAccessButton(
-                systemImage: vm.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
-                label: captionLabel,
-                accessibilityId: "player.quickAccess.captions"
-            ) {
-                if suppressCaptionTap {
-                    suppressCaptionTap = false
-                    return
+                if !vm.isAudioOnlyMode {
+                    quickAccessButton(
+                        systemImage: "film.stack",
+                        label: qualityLabel,
+                        accessibilityId: "player.quickAccess.quality"
+                    ) { showQualityPicker = true }
+                    .disabled(vm.availableFormats.isEmpty)
+                    .opacity(vm.availableFormats.isEmpty ? 0.4 : 1)
                 }
-                vm.toggleCaptions()
-            }
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.5).onEnded { _ in
-                    suppressCaptionTap = true
-                    showCaptionPicker = true
-                }
-            )
 
-            if vm.availableAudioTracks.count > 1 {
+                // Always visible: tap toggles captions on/off; long-press opens the
+                // language picker. The more menu's Captions row opens the same
+                // picker. `toggleCaptions()` no-ops when no tracks are loaded.
                 quickAccessButton(
-                    systemImage: "waveform",
-                    label: audioTrackLabel,
-                    accessibilityId: "player.quickAccess.audioTrack"
-                ) { showAudioTrackPicker = true }
-            }
+                    systemImage: vm.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
+                    label: captionLabel,
+                    accessibilityId: "player.quickAccess.captions"
+                ) {
+                    if suppressCaptionTap {
+                        suppressCaptionTap = false
+                        return
+                    }
+                    vm.toggleCaptions()
+                }
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                        suppressCaptionTap = true
+                        showCaptionPicker = true
+                    }
+                )
 
-            quickAccessButton(
-                systemImage: "moon.zzz",
-                label: sleepTimerLabel,
-                accessibilityId: "player.quickAccess.sleepTimer"
-            ) { showSleepTimerPicker = true }
+                if vm.availableAudioTracks.count > 1 {
+                    quickAccessButton(
+                        systemImage: "waveform",
+                        label: audioTrackLabel,
+                        accessibilityId: "player.quickAccess.audioTrack"
+                    ) { showAudioTrackPicker = true }
+                }
+
+                quickAccessButton(
+                    systemImage: "moon.zzz",
+                    label: sleepTimerLabel,
+                    accessibilityId: "player.quickAccess.sleepTimer"
+                ) { showSleepTimerPicker = true }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 4)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("player.quickAccessRow")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 4)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("player.quickAccessRow")
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     // MARK: - Quick-access label helpers

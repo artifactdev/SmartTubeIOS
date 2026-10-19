@@ -1,5 +1,6 @@
 #if !os(tvOS)
 import Foundation
+import SmartTubeIOSCore
 
 // MARK: - TOSPlayerTransportSupport
 //
@@ -106,6 +107,37 @@ enum TOSPlayerTransportSupport {
         guard !candidates.isEmpty else { return nil }
         let atOrBelow = candidates.filter { $0.height <= maxHeight }.max(by: { $0.height < $1.height })
         return (atOrBelow ?? candidates.min(by: { $0.height < $1.height }))?.id
+    }
+
+    // MARK: Chapter navigation
+
+    /// Start time of the first chapter strictly after `time`, or nil when the
+    /// playhead is already in (or past) the last chapter.
+    static func nextChapterStart(in chapters: [Chapter], after time: Double) -> Double? {
+        chapters.first(where: { $0.startTime > time })?.startTime
+    }
+
+    /// Target of the "previous chapter" action, mirroring the direct player:
+    /// when more than 3 s into the current chapter, restart that chapter;
+    /// otherwise jump to the start of the previous one (nil when already in the
+    /// first chapter within its first 3 s).
+    static func previousChapterStart(in chapters: [Chapter], currentTime: Double) -> Double? {
+        guard !chapters.isEmpty else { return nil }
+        guard let current = chapters.last(where: { $0.startTime <= currentTime }) else { return nil }
+        if currentTime - current.startTime > 3 { return current.startTime }
+        return chapters.last(where: { $0.startTime < current.startTime })?.startTime
+    }
+
+    // MARK: Playlist gating
+
+    /// Whether the video's previous/next buttons can navigate the active queue.
+    /// Only videos that came from the Current Queue (a YouTube playlist, search
+    /// "play all", or the Library queue) carry the synthetic queue `playlistId`;
+    /// a queue of one item has nowhere to go, so both buttons stay disabled.
+    static func canNavigatePlaylist(
+        playlistId: String?, queuePlaylistID: String, queueCount: Int
+    ) -> Bool {
+        playlistId == queuePlaylistID && queueCount > 1
     }
 }
 #endif

@@ -52,6 +52,7 @@ struct PlayerQuickAccessPill: View {
         Button(action: action) {
             Label(label, systemImage: systemImage)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
