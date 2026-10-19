@@ -196,6 +196,22 @@ extension TOSPlayerViewModel {
                     recentAutoSkip = nil
                 }
             }
+            // Geometry of YouTube's own progress bar (fractions of the iframe
+            // viewport). The marker layer is non-interactive and hides with the
+            // control bar, so a missing rect just means "no markers this tick".
+            if let pb = json["pb"] as? [String: Any],
+                let x = (pb["x"] as? NSNumber)?.doubleValue,
+                let y = (pb["y"] as? NSNumber)?.doubleValue,
+                let w = (pb["w"] as? NSNumber)?.doubleValue,
+                let h = (pb["h"] as? NSNumber)?.doubleValue
+            {
+                progressBarRect = TOSProgressBarRect(
+                    x: x, y: y, width: w, height: h,
+                    isVisible: (pb["visible"] as? Bool) ?? false
+                )
+            } else {
+                progressBarRect = nil
+            }
             // "ready" fires on the very first poll, before video.duration has
             // necessarily loaded (the video starts muted for autoplay-policy
             // reasons, so metadata can lag a poll or two) — confirmed live:

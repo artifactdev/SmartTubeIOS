@@ -43,6 +43,11 @@ enum TOSPlayerError: Equatable {
     /// #158). The embed only has the TV session cookies, and Google sign-in can't complete
     /// inside it, so the standard player (authenticated InnerTube) takes over.
     case signInRequired
+    /// YouTube reported a non-OK playability status (members-only, region
+    /// block, removed video). The Shorts embed uses this to show YouTube's own
+    /// reason. The TOS path deliberately does not probe playability — it relies
+    /// on YouTube's visible error UI (ADR-0010).
+    case unavailable(String)
 
     var isFatal: Bool {
         switch self {
@@ -77,6 +82,10 @@ final class TOSPlayerViewModel: NSObject {
     /// class every tick. Native chrome and SponsorBlock UI are suppressed while
     /// set so nothing SmartTube draws can cover or replace an ad frame.
     var isAd: Bool = false
+    /// Geometry of YouTube's own progress bar, as fractions of the embed
+    /// viewport. Drives the non-interactive SponsorBlock/chapter marker layer;
+    /// nil when the TV embed does not expose a usable progress bar.
+    var progressBarRect: TOSProgressBarRect?
     /// Single in-flight history-session resolution; tick callbacks can arrive rapidly.
     var trackingSessionTask: Task<Void, Never>?
     /// Last time tracking-URL resolution came back empty; gates retries in
@@ -373,17 +382,6 @@ final class TOSPlayerViewModel: NSObject {
             in: .page
         )
         contentController.addUserScript(miniChromeScript)
-
-        // iOS-only tap-to-show-controls helper (see iosTapNoPauseJS). Lets YouTube's
-        // own tap reveal its control bar, but immediately resumes the video so a
-        // tap on the video body never leaves playback paused.
-        let tapNoPauseScript = WKUserScript(
-            source: Self.iosTapNoPauseJS,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: false,
-            in: .page
-        )
-        contentController.addUserScript(tapNoPauseScript)
         #endif
 
         config.userContentController = contentController
@@ -937,6 +935,39 @@ final class TOSPlayerViewModel: NSObject {
             });
             _observer.observe(document.documentElement, {childList: true, subtree: true});
 
+            // Geometry of YouTube's own progress bar, expressed as fractions of
+            // the iframe viewport. Used only to align a non-interactive
+            // SponsorBlock/chapter marker layer over it; nothing is moved,
+            // hidden or resized. Returns null when the control bar is absent.
+            function progressBarRect() {
+                var p = document.getElementById('movie_player');
+                if (!p) return null;
+                var bar = p.querySelector('.ytp-progress-bar');
+                if (!bar) return null;
+                var r = bar.getBoundingClientRect();
+                if (!r || r.width <= 0 || r.height <= 0) return null;
+                var visible = !p.classList.contains('ytp-autohide');
+                var chrome = p.querySelector('.ytp-chrome-bottom');
+                if (chrome) {
+                    try {
+                        var cs = window.getComputedStyle(chrome);
+                        if (cs.display === 'none' || parseFloat(cs.opacity || '1') < 0.05) {
+                            visible = false;
+                        }
+                    } catch (e) {}
+                }
+                var vw = window.innerWidth || 1;
+                var vh = window.innerHeight || 1;
+                function clamp(v) { return Math.min(Math.max(v, 0), 1); }
+                return {
+                    x: clamp(r.left / vw),
+                    y: clamp(r.top / vh),
+                    w: clamp(r.width / vw),
+                    h: clamp(r.height / vh),
+                    visible: visible
+                };
+            }
+
             function pollVideo() {
                 var video = document.querySelector('video');
                 if (!video) return;
@@ -1045,7 +1076,8 @@ final class TOSPlayerViewModel: NSObject {
                 var _player = document.getElementById('movie_player');
                 var _ad = !!(_player && _player.classList.contains('ad-showing'));
 
-                postMsg({type: 'tick', t: t, state: s, duration: video.duration || 0, ad: _ad});
+                postMsg({type: 'tick', t: t, state: s, duration: video.duration || 0, ad: _ad,
+                         pb: progressBarRect()});
 
                 if (s !== _prevState) {
                     _prevState = s;
@@ -1064,105 +1096,69 @@ final class TOSPlayerViewModel: NSObject {
     // related overlay, end-screen cards) while the player is minimized to the
     // floating corner window, so only the video shows.
     //
-    // NOTE: SmartTube formerly forced/hid YouTube's full-screen control bar via CSS,
-    // but that left the bar stuck hidden — YouTube's own state never received the
-    // "show" signal, so clearing the CSS didn't bring it back. YouTube's own tap
-    // handling (show on tap, auto-hide on inactivity) is therefore left fully intact;
-    // see iosTapNoPauseJS for how the tap's *pause* side-effect is neutralised instead.
+    // Ad safety: ads are never hidden, even while minimized. The helper removes
+    // the hide rules whenever `#movie_player` has `ad-showing` and restores them
+    // when the ad ends. It watches the class directly (MutationObserver plus a
+    // 250 ms fallback) so restoring does not depend on a Swift tick. No ad or
+    // paid-promotion selector is in the hide list; the full-screen player injects
+    // no hider at all (ADR-0010).
     //
     // Injected with forMainFrameOnly: false, so it also runs in the non-player
     // wrapper frame — the handler no-ops there because there is no #movie_player.
     private static let iosMiniChromeJS: String = """
         (function() {
-            function ensureStyle(id) {
-                var el = document.getElementById(id);
+            var HIDE_CSS =
+                '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,' +
+                '.ytp-large-play-button,.ytp-pause-overlay,.ytp-ce-element,.ytp-endscreen-content,' +
+                '.ytp-endscreen-paginate,.ytp-cards-teaser,.ytp-cards-button,' +
+                '.ytp-ce-covering-overlay,.ytp-ce-video,.ytp-ce-playlist' +
+                '{display:none!important;visibility:hidden!important;}';
+
+            var _wanted = false;
+            var _applied = null;
+
+            function ensureStyle() {
+                var el = document.getElementById('st-mini-chrome-style');
                 if (!el) {
                     el = document.createElement('style');
-                    el.id = id;
+                    el.id = 'st-mini-chrome-style';
                     (document.head || document.documentElement).appendChild(el);
                 }
                 return el;
             }
 
+            function hasAd() {
+                var p = document.getElementById('movie_player');
+                return !!(p && p.classList.contains('ad-showing'));
+            }
+
+            function apply() {
+                var hide = _wanted && !hasAd();
+                if (hide === _applied) return;
+                var style = ensureStyle();
+                if (style) { style.textContent = hide ? HIDE_CSS : ''; }
+                _applied = hide;
+            }
+
             window.__stMiniChrome = function(hidden) {
-                ensureStyle('st-mini-chrome-style').textContent = hidden
-                    ? '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,' +
-                      '.ytp-large-play-button,.ytp-pause-overlay,.ytp-ce-element,.ytp-endscreen-content,' +
-                      '.ytp-endscreen-paginate,.ytp-cards-teaser,.ytp-cards-button,' +
-                      '.ytp-paid-content-overlay,.ytp-ad-overlay-container,.ytp-ad-player-overlay,' +
-                      '.ytp-ad-player-overlay-layout,.ytp-ad-text-overlay,.ytp-ad-image-overlay,' +
-                      '.ytp-ad-module,.ytp-featured-product,.ytp-suggested-action,.ytp-shopping-button,' +
-                      '.ytp-ce-covering-overlay,.ytp-ce-video,.ytp-ce-playlist' +
-                      '{display:none!important;visibility:hidden!important;}'
-                    : '';
+                _wanted = !!hidden;
+                apply();
             };
-        })();
-        """
 
-    // MARK: - iOS tap-to-show-controls without pausing
-    //
-    // In the embedded player a tap on the video surface does double duty: it
-    // reveals YouTube's own controls AND toggles play/pause. Users found "tapping
-    // to see the controls pauses the video" surprising (YouTube's native app
-    // separates the two). Rather than suppressing YouTube's tap — which the
-    // previous CSS attempt showed breaks its control-bar state machine — we let
-    // the tap through so YouTube shows its bar, then immediately undo only its
-    // pause side-effect by resuming inside the `pause` event handler.
-    //
-    // Scope is limited to taps that are NOT on YouTube's own chrome: a tap on the
-    // control bar (play/pause button, scrubber, settings) is a deliberate pause/play
-    // and is left alone. `noPauseUntil` is armed on touch-down in the video area and
-    // consumed by the next `pause` event.
-    //
-    // Injected with forMainFrameOnly: false; the wrapper frame simply finds no
-    // <video> and no-ops.
-    private static let iosTapNoPauseJS: String = """
-        (function() {
-            var NO_PAUSE_WINDOW_MS = 700;
-
-            function inChrome(node) {
-                for (var n = node; n && n.classList; n = n.parentElement) {
-                    var c = n.classList;
-                    if (c.contains('ytp-chrome-top') || c.contains('ytp-chrome-bottom') ||
-                        c.contains('ytp-chrome-control') || c.contains('ytp-popup') ||
-                        c.contains('ytp-settings-menu') || c.contains('ytp-progress-bar-container')) {
-                        return true;
-                    }
+            function watch() {
+                var root = document.documentElement;
+                if (root) {
+                    new MutationObserver(apply).observe(root, {
+                        childList: true, subtree: true, attributes: true, attributeFilter: ['class']
+                    });
                 }
-                return false;
+                setInterval(apply, 250);
             }
-
-            var noPauseUntil = 0;
-
-            function armFromTouch(e) {
-                if (!inChrome(e.target)) { noPauseUntil = performance.now() + NO_PAUSE_WINDOW_MS; }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', watch);
+            } else {
+                watch();
             }
-            document.addEventListener('touchstart', armFromTouch, true);
-            document.addEventListener('mousedown', armFromTouch, true);
-
-            function resume(v) {
-                var player = document.getElementById('movie_player');
-                if (player && typeof player.playVideo === 'function') { player.playVideo(); return; }
-                var p = v.play();
-                if (p && p['catch']) { p['catch'](function () {}); }
-            }
-
-            function onVideoPause(e) {
-                if (performance.now() < noPauseUntil) {
-                    noPauseUntil = 0;
-                    resume(e.target);
-                }
-            }
-
-            function hook() {
-                var v = document.querySelector('video');
-                if (!v || v.__stTapNoPauseHooked) { return; }
-                v.__stTapNoPauseHooked = true;
-                v.addEventListener('pause', onVideoPause);
-            }
-
-            hook();
-            setInterval(hook, 1000);
         })();
         """
 }

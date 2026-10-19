@@ -69,6 +69,18 @@ native back/speed/more cluster, the SponsorBlock toasts and the brightness/volum
 hider in the full player, so no ad frame can be hidden; the guarantees are structural, not
 polling-dependent.
 
+**Native additions (ADR-0010)**
+- *Floating mini-player* — while minimized, `iosMiniChromeJS` hides YouTube's in-page
+  chrome so the 16:9 window shows only video. It never hides ad/paid UI: the hide rules
+  are removed whenever `#movie_player` has `ad-showing` (MutationObserver + 250 ms
+  fallback) and no ad selector is in the list. The corner buttons are hidden during ads.
+- *Markers* — `stateDetectionJS` reports `.ytp-progress-bar`'s rect as viewport fractions
+  on every tick. `SponsorBlockMarkerLayer` draws SponsorBlock segments and chapter ticks
+  in a separate, non-interactive SwiftUI layer. It hides when the control bar auto-hides
+  (`ytp-autohide`) and during ads. Nothing in the embed is moved, hidden or resized.
+- *Marker navigation* — previous/next chapter and segment buttons plus the Segments sheet
+  seek via `video.currentTime`; the marker layer itself never receives touches.
+
 **Fallback**
 If `playerError.isFatal` (error 100/101/150/153), `TOSPlayerView` calls `onFallback()`.
 `MainSidebarView` sets `tosPlayerFallbackVideoId = video.id`, which switches that video

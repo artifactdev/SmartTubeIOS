@@ -63,6 +63,12 @@ struct TOSFloatingPlayerView: View {
         tosState.vm?.playerState == .playing || tosState.vm?.playerState == .buffering
     }
 
+    /// True while YouTube is showing an ad. The corner buttons are hidden so no
+    /// native surface covers an ad frame; tapping the card still expands it.
+    private var isAd: Bool {
+        tosState.vm?.isAd ?? false
+    }
+
     var body: some View {
         // Read the corner in `body` (not inside a layout closure) so @Observable
         // registers the dependency and a snap re-renders this view.
@@ -184,8 +190,12 @@ struct TOSFloatingPlayerView: View {
         .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
         .contentShape(Rectangle())
         .onTapGesture { tosState.expand() }
-        .overlay(alignment: .topLeading) { playPauseButton }
-        .overlay(alignment: .topTrailing) { closeButton }
+        .overlay(alignment: .topLeading) {
+            if !isAd { playPauseButton }
+        }
+        .overlay(alignment: .topTrailing) {
+            if !isAd { closeButton }
+        }
         // Without this, SwiftUI flattens this ZStack's accessibility tree so each
         // child Button inherits the container identifier and XCUITest can't find
         // them individually. Same fix the bottom bar used.

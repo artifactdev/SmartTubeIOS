@@ -71,6 +71,8 @@ public struct TOSPlayerView: View {
     /// Drives `chaptersOverlay` (see moreButton's Chapters row) — same rationale as
     /// showCommentsSheet above (#10).
     @State private var showChaptersSheet = false
+    /// Drives the SponsorBlock segments sheet (marker navigation).
+    @State private var showSegmentsSheet = false
     /// Feedback alert for "Report Incorrect Segment" (#67) on either SponsorBlock toast.
     @State private var reportSegmentAlert: DownloadAlertItem?
 
@@ -88,6 +90,9 @@ public struct TOSPlayerView: View {
     /// rather than immediately, so the final value is visible for a moment.
     @State private var gestureHUD: GestureAdjustmentInfo?
     @State private var hudDismissTask: Task<Void, Never>?
+    /// Shows the volume HUD for hardware volume-key presses (iOS suppresses its
+    /// own system HUD while `SystemVolumeControl`'s MPVolumeView is mounted).
+    @State private var volumeMonitor = SystemVolumeMonitor()
     #endif
 
     #if os(iOS)
@@ -275,6 +280,24 @@ public struct TOSPlayerView: View {
                     }
                     #endif
 
+                    // MARK: SponsorBlock + chapter markers
+                    //
+                    // Additive, non-interactive markers aligned to YouTube's own
+                    // scrubber. The layer is hidden while the control bar is
+                    // auto-hidden and while an ad is playing, and never receives
+                    // touches. See ADR-0010.
+                    if !vm.isAd, let barRect = vm.progressBarRect, barRect.isVisible,
+                        vm.duration > 0,
+                        !(vm.sponsorSegments.isEmpty && vm.chapters.isEmpty)
+                    {
+                        SponsorBlockMarkerLayer(
+                            rect: barRect,
+                            duration: vm.duration,
+                            sponsorSegments: vm.sponsorSegments,
+                            chapters: vm.chapters
+                        )
+                    }
+
                     #if os(macOS)
                     // MARK: Top-right control cluster — more menu (like/dislike, sleep
                     // timer, share) + playback speed picker. See topRightControls for why
@@ -323,7 +346,14 @@ public struct TOSPlayerView: View {
 
                     // MARK: Brightness/volume adjustment HUD (#19)
                     // Suppressed during ads: no native surface may cover an ad frame.
-                    if let gestureHUD, !vm.isAd {
+                    // The volume monitor (hardware keys) takes priority while it is
+                    // visible; otherwise show the drag-driven gesture HUD.
+                    if let volumeLevel = volumeMonitor.level, !vm.isAd {
+                        GestureAdjustmentHUD(
+                            info: GestureAdjustmentInfo(kind: .volume, value: volumeLevel)
+                        )
+                        .transition(.opacity)
+                    } else if let gestureHUD, !vm.isAd {
                         GestureAdjustmentHUD(info: gestureHUD)
                             .transition(.opacity)
                     }
@@ -371,6 +401,13 @@ public struct TOSPlayerView: View {
                         chaptersOverlay(vm: vm)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                             .animation(.easeOut(duration: 0.2), value: showChaptersSheet)
+                    }
+
+                    // MARK: SponsorBlock segments overlay (marker navigation)
+                    if showSegmentsSheet {
+                        sponsorSegmentsOverlay(vm: vm)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .animation(.easeOut(duration: 0.2), value: showSegmentsSheet)
                     }
                 }
             }
@@ -426,6 +463,9 @@ public struct TOSPlayerView: View {
                 let physicallyLandscape = UIDevice.current.orientation.isLandscape
                 OrientationManager.shared.playerIsActive =
                     isLandscapeLocked || store.settings.landscapeAlwaysPlay || physicallyLandscape
+                // Hardware-key volume changes have no notification — KVO on
+                // outputVolume is the only signal (see SystemVolumeMonitor).
+                volumeMonitor.start()
                 #endif
             }
             // Pause the embedded <video> element when this view leaves the hierarchy.
@@ -446,6 +486,7 @@ public struct TOSPlayerView: View {
             .onDisappear {
                 #if os(iOS)
                 controlsHideTask?.cancel()
+                volumeMonitor.stop()
                 UIDevice.current.endGeneratingDeviceOrientationNotifications()
                 OrientationManager.shared.playerIsActive = false
                 // On iOS, only pause when fully stopped — not when minimizing to mini-player.
@@ -657,6 +698,46 @@ public struct TOSPlayerView: View {
             .padding(.top, 12)
             .padding(.leading, 16)
 
+            // Marker navigation. Kept in its own row so the playhead/queue row
+            // above stays unchanged; only rendered when the video actually has
+            // chapters or SponsorBlock segments. The timeline markers themselves
+            // are non-interactive (YouTube's scrubber keeps every touch).
+            if !vm.chapters.isEmpty || !vm.sponsorSegments.isEmpty {
+                HStack(spacing: 24) {
+                    secondaryControlButton(
+                        symbol: AppSymbol.previousChapter, isEnabled: vm.hasPreviousChapter
+                    ) {
+                        vm.skipToPreviousChapter()
+                    }
+                    .accessibilityIdentifier("tosPlayer.previousChapterButton")
+
+                    secondaryControlButton(
+                        symbol: "backward.fill", isEnabled: vm.hasPreviousSponsorSegment
+                    ) {
+                        vm.skipToPreviousSponsorSegment()
+                    }
+                    .accessibilityIdentifier("tosPlayer.previousSegmentButton")
+
+                    secondaryControlButton(
+                        symbol: "forward.fill", isEnabled: vm.hasNextSponsorSegment
+                    ) {
+                        vm.skipToNextSponsorSegment()
+                    }
+                    .accessibilityIdentifier("tosPlayer.nextSegmentButton")
+
+                    secondaryControlButton(
+                        symbol: AppSymbol.nextChapter, isEnabled: vm.hasNextChapter
+                    ) {
+                        vm.skipToNextChapter()
+                    }
+                    .accessibilityIdentifier("tosPlayer.nextChapterButton")
+
+                    Spacer()
+                }
+                .padding(.top, 12)
+                .padding(.leading, 16)
+            }
+
             Spacer()
         }
     }
@@ -824,6 +905,56 @@ public struct TOSPlayerView: View {
                 .accessibilityIdentifier("tosPlayer.moreMenu.chaptersRow")
             }
 
+            if !vm.chapters.isEmpty || !vm.sponsorSegments.isEmpty {
+                Menu {
+                    if !vm.sponsorSegments.isEmpty {
+                        Button {
+                            vm.skipToPreviousSponsorSegment()
+                        } label: {
+                            Label("Previous Segment", systemImage: "backward.fill")
+                        }
+                        .disabled(!vm.hasPreviousSponsorSegment)
+                        .accessibilityIdentifier("tosPlayer.moreMenu.previousSegmentRow")
+
+                        Button {
+                            vm.skipToNextSponsorSegment()
+                        } label: {
+                            Label("Next Segment", systemImage: "forward.fill")
+                        }
+                        .disabled(!vm.hasNextSponsorSegment)
+                        .accessibilityIdentifier("tosPlayer.moreMenu.nextSegmentRow")
+
+                        Button {
+                            showSegmentsSheet = true
+                        } label: {
+                            Label("All Segments", systemImage: "list.bullet")
+                        }
+                        .accessibilityIdentifier("tosPlayer.moreMenu.segmentsRow")
+                    }
+
+                    if !vm.chapters.isEmpty {
+                        Button {
+                            vm.skipToPreviousChapter()
+                        } label: {
+                            Label("Previous Chapter", systemImage: AppSymbol.previousChapter)
+                        }
+                        .disabled(!vm.hasPreviousChapter)
+                        .accessibilityIdentifier("tosPlayer.moreMenu.previousChapterRow")
+
+                        Button {
+                            vm.skipToNextChapter()
+                        } label: {
+                            Label("Next Chapter", systemImage: AppSymbol.nextChapter)
+                        }
+                        .disabled(!vm.hasNextChapter)
+                        .accessibilityIdentifier("tosPlayer.moreMenu.nextChapterRow")
+                    }
+                } label: {
+                    Label("Markers", systemImage: "bookmark")
+                }
+                .accessibilityIdentifier("tosPlayer.moreMenu.markersRow")
+            }
+
             Button {
                 store.settings.loopEnabled.toggle()
             } label: {
@@ -868,11 +999,10 @@ public struct TOSPlayerView: View {
 
     // MARK: - Chapters overlay
     //
-    // #10 (closes #68, #105): the TOS player embeds YouTube's own IFrame page
-    // directly rather than the IFrame JS API, so SmartTube has no control over —
-    // and can't add markers to — the embed's own scrub bar. This overlay is the
-    // native equivalent: a tap-to-jump list, seeking via vm.seekTo (a plain
-    // `video.currentTime = X` JS assignment, not a user-activation-gated API).
+    // #10 (closes #68, #105): a tap-to-jump chapter list, seeking via vm.seekTo
+    // (a plain `video.currentTime = X` JS assignment, not a user-activation-gated
+    // API). The timeline also shows chapter ticks via SponsorBlockMarkerLayer,
+    // but those stay non-interactive so YouTube's scrubber keeps every touch.
     private func chaptersOverlay(vm: TOSPlayerViewModel) -> some View {
         ChaptersOverlayView(
             chapters: vm.chapters,
@@ -882,6 +1012,23 @@ public struct TOSPlayerView: View {
             },
             onDismiss: { showChaptersSheet = false },
             accessibilityId: "tosPlayer.chaptersOverlay"
+        )
+    }
+
+    // MARK: - SponsorBlock segments overlay
+
+    /// Marker navigation: a tap-to-jump list of SponsorBlock segments. The
+    /// on-timeline markers are deliberately non-interactive, so this sheet is
+    /// how a segment is selected without stealing touches from YouTube.
+    private func sponsorSegmentsOverlay(vm: TOSPlayerViewModel) -> some View {
+        SponsorSegmentsOverlayView(
+            segments: vm.sponsorSegments,
+            onSelect: { segment in
+                vm.seekTo(segment.start)
+                showSegmentsSheet = false
+            },
+            onDismiss: { showSegmentsSheet = false },
+            accessibilityId: "tosPlayer.segmentsOverlay"
         )
     }
 
