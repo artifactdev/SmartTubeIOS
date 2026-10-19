@@ -14,7 +14,7 @@ private let tosStoreLog = Logger(subsystem: "com.void.smarttube.app", category: 
 //
 // Presentation state:
 //   .hidden     — no video loaded, WKWebView released
-//   .miniPlayer — audio continues in TOSMiniPlayerView, TOSPlayerView dismissed
+//   .miniPlayer — audio continues in TOSFloatingPlayerView, TOSPlayerView dismissed
 //   .fullScreen — TOSPlayerView presented as a full-screen cover
 //
 // Lifecycle:
@@ -53,7 +53,7 @@ public final class TOSPlayerStateStore {
     // The view model lives here, not in TOSPlayerView's @State, so the WKWebView
     // keeps running after the view is dismissed to mini-player.
     // Internal (not public) because TOSPlayerViewModel is an internal type;
-    // all consumers (TOSPlayerView, TOSMiniPlayerView) are in the same module.
+    // all consumers (TOSPlayerView, TOSFloatingPlayerView) are in the same module.
     private(set) var vm: TOSPlayerViewModel?
 
     // MARK: - Navigation history (swipe-right / "previous")
