@@ -198,7 +198,7 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
                         systemName: AppSymbol.previousTrack,
                         accessibilityIdentifier: "tosPlayer.previousButton",
                         accessibilityLabel: "Previous video",
-                        iconSize: 24,
+                        iconSize: 20,
                         isEnabled: vm.canPlayPreviousVideo
                     ) {
                         onInteraction()
@@ -212,7 +212,7 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
                     systemName: AppSymbol.previousChapter,
                     accessibilityIdentifier: "tosPlayer.previousChapterButton",
                     accessibilityLabel: "Previous chapter",
-                    iconSize: 24,
+                    iconSize: 20,
                     isEnabled: vm.hasPreviousChapter
                 ) {
                     onInteraction()
@@ -239,7 +239,7 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
                     systemName: AppSymbol.nextChapter,
                     accessibilityIdentifier: "tosPlayer.nextChapterButton",
                     accessibilityLabel: "Next chapter",
-                    iconSize: 24,
+                    iconSize: 20,
                     isEnabled: vm.hasNextChapter
                 ) {
                     onInteraction()
@@ -251,7 +251,7 @@ struct TOSPlayerTransportOverlay<MoreMenu: View>: View {
                         systemName: AppSymbol.nextTrack,
                         accessibilityIdentifier: "tosPlayer.nextButton",
                         accessibilityLabel: "Next video",
-                        iconSize: 24,
+                        iconSize: 20,
                         isEnabled: vm.canPlayNextVideo
                     ) {
                         onInteraction()
