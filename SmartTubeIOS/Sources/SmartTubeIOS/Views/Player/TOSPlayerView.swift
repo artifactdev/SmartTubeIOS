@@ -940,6 +940,13 @@ public struct TOSPlayerView: View {
             }
 
             Button {
+                vm.requestIFrameFullscreen()
+            } label: {
+                Label("Fullscreen", systemImage: AppSymbol.fullscreen)
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.fullscreenRow")
+
+            Button {
                 store.settings.loopEnabled.toggle()
             } label: {
                 if store.settings.loopEnabled {

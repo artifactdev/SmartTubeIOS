@@ -151,6 +151,10 @@ enum AppSymbol {
     static let download = "arrow.down.to.line"
     static let watchLater = "clock.badge"
     static let audioOnly = "waveform.circle"
+    /// Expands the video to fill the display (see TOSPlayerView's More-menu
+    /// Fullscreen row — programmatic trigger for the wrapper page's fullscreen
+    /// button).
+    static let fullscreen = "arrow.up.left.and.arrow.down.right"
 
     // MARK: - Status / info
     static let warning = "exclamationmark.triangle.fill"

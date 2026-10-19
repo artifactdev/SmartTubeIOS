@@ -351,6 +351,13 @@ final class TOSPlayerViewModel: NSObject {
 
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
+        // WKWebView disables the Fullscreen API by default (WKPreferences.h: "The
+        // default value is NO"), which makes `Element.prototype.requestFullscreen`
+        // absent from every document in the web view. Verified by the embedfs spike
+        // (2026-10): with this off the wrapper page reports fs=0/req=0 and YouTube's
+        // iframe reports fs=0/req=0. Enabled so the wrapper page's `#st-fs` button —
+        // the target of the More-menu Fullscreen row — can attempt a request.
+        config.preferences.isElementFullscreenEnabled = true
         #if os(iOS)
         // CRITICAL on iOS: without this, YouTube's embed hijacks the native system
         // video player when the user taps play, taking control away from the WKWebView.
@@ -404,6 +411,18 @@ final class TOSPlayerViewModel: NSObject {
             in: .page
         )
         contentController.addUserScript(chromeScript)
+
+        // Fullscreen receiver for the More-menu Fullscreen row: runs in every frame
+        // but only arms itself inside the embed iframe (the document that owns the
+        // <video>), because a cross-origin iframe element cannot be fullscreened
+        // from the wrapper page.
+        let fullscreenScript = WKUserScript(
+            source: Self.fullscreenReceiverJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: false,
+            in: .page
+        )
+        contentController.addUserScript(fullscreenScript)
 
         // Media-option facade over the embed's own player object (quality,
         // captions, audio tracks). Defines window.__stPlayerAPI; no work until
@@ -698,6 +717,68 @@ final class TOSPlayerViewModel: NSObject {
     }
     #endif
 
+    /// Puts the embedded video into fullscreen — the More-menu Fullscreen row.
+    ///
+    /// WHY THIS GOES THROUGH postMessage: requesting fullscreen on the `<iframe>`
+    /// element from the wrapper page fullscreens the *wrapper document*
+    /// (example.com), not the player — WebKit cannot present a cross-origin iframe
+    /// element that way (confirmed on device). The video element lives inside the
+    /// iframe's own document, reachable only from that document. Frame-targeted
+    /// `evaluateJavaScript(_:in:)` with `embedFrameInfo` is not dependable for this
+    /// (its completion silently never fires on iOS 26.4 — reproduced in the UI
+    /// test), so the wrapper button posts `st-enter-fullscreen` to the iframe's
+    /// `contentWindow` and `fullscreenReceiverJS` (injected into every frame)
+    /// performs the call in the document that actually owns the `<video>`.
+    ///
+    /// The button remains the single seam the row triggers, as requested; what
+    /// changed is what the button does.
+    func requestIFrameFullscreen() {
+        postFullscreenStage("row")
+        let js = """
+            (function(){
+                var b = document.getElementById('st-fs');
+                if (b) { b.click(); return 'clicked'; }
+                var f = document.getElementById('yt');
+                if (!f || !f.contentWindow) return 'no-iframe';
+                f.contentWindow.postMessage('st-enter-fullscreen', '*');
+                return 'posted';
+            })();
+            """
+        webView.evaluateJavaScript(js, in: nil, in: .page) { result in
+            switch result {
+            case .success(let value):
+                tosLog.notice(
+                    "[fullscreen] wrapper fullscreen trigger result: \(String(describing: value), privacy: .public)")
+                Self.postFullscreenStage("eval-ok")
+            case .failure(let error):
+                tosLog.notice(
+                    "[fullscreen] wrapper fullscreen trigger ERROR: \(String(describing: error), privacy: .public)")
+                Self.postFullscreenStage("eval-error")
+            }
+        }
+    }
+
+    /// Static twin of `postFullscreenStage` for use from non-isolated eval
+    /// completions.
+    private static func postFullscreenStage(_ stage: String) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("com.void.smarttube.tosplayer.fullscreen.\(stage)" as CFString),
+            nil, nil, true
+        )
+    }
+
+    /// Posts a `tosplayer.fullscreen.<stage>` Darwin notification. These are the
+    /// observability channel for the More-menu Fullscreen row: the UI test and
+    /// device-log workflows watch them instead of trying to read WebKit state.
+    private func postFullscreenStage(_ stage: String) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("com.void.smarttube.tosplayer.fullscreen.\(stage)" as CFString),
+            nil, nil, true
+        )
+    }
+
     // MARK: - Private helpers
 
     // FRAME-TARGETED EVAL (the fix for the cross-origin-iframe defect described on
@@ -845,6 +926,17 @@ final class TOSPlayerViewModel: NSObject {
         // window.parent !== window (iframe context). Loading the embed URL
         // directly as the top-level document makes window.parent === window,
         // which causes YouTube to fire error 153 for all videos.
+        //
+        // The page also carries `#st-fs`, the wrapper's fullscreen button — the
+        // single seam that asks WebKit to put the `<iframe>` into fullscreen.
+        // YouTube's own TV-UA embed renders no fullscreen control at all (verified
+        // by the embedfs spike: btn=none in every config), so this button *is* the
+        // fullscreen entry point. It stays visually hidden and non-interactive
+        // (opacity:0, pointer-events:none) because for now it is only triggered
+        // programmatically by `requestIFrameFullscreen()` (the More-menu Fullscreen
+        // row). NOTE: WebKit gates `requestFullscreen()` behind transient user
+        // activation, which a SwiftUI-initiated evaluation cannot supply, so this
+        // path reports `rejected` / no-op until a real tap on web content drives it.
         let html = """
             <!DOCTYPE html>
             <html>
@@ -853,6 +945,8 @@ final class TOSPlayerViewModel: NSObject {
                 <style>
                     html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;background:#000}
                     iframe{position:absolute;top:0;left:0}
+                    #st-fs{position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;
+                        pointer-events:none;border:0;padding:0;background:transparent}
                 </style>
             </head>
             <body>
@@ -862,6 +956,43 @@ final class TOSPlayerViewModel: NSObject {
                     allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
                     allowfullscreen>
                 </iframe>
+                <button id="st-fs" aria-label="Fullscreen"></button>
+                <script>
+                    // Reports every stage of a fullscreen attempt back to Swift
+                    // through the ytCallback channel (type "fullscreen"), so the
+                    // More-menu Fullscreen row is observable in the device log and
+                    // in UI tests. `no-api` means isElementFullscreenEnabled did not
+                    // take effect; `rejected` is the expected outcome when the call
+                    // has no user activation behind it.
+                    (function() {
+                        function report(payload) {
+                            try {
+                                var cb = window.__nativeYTCallback;
+                                if (cb) cb.postMessage(JSON.stringify(payload));
+                            } catch(e) {}
+                        }
+                        document.addEventListener('fullscreenchange', function() {
+                            report({ type: 'fullscreen', stage: 'change',
+                                     active: !!document.fullscreenElement });
+                        }, true);
+                        var btn = document.getElementById('st-fs');
+                        if (!btn) return;
+                        btn.addEventListener('click', function() {
+                            // postMessage rather than iframe.requestFullscreen():
+                            // fullscreening the iframe *element* presents the wrapper
+                            // document (example.com) instead of the player. The
+                            // injected fullscreenReceiverJS performs the call inside
+                            // the iframe, where the <video> actually lives.
+                            report({ type: 'fullscreen', stage: 'clicked' });
+                            var f = document.getElementById('yt');
+                            if (!f || !f.contentWindow) {
+                                report({ type: 'fullscreen', stage: 'no-iframe' });
+                                return;
+                            }
+                            f.contentWindow.postMessage('st-enter-fullscreen', '*');
+                        });
+                    })();
+                </script>
             </body>
             </html>
             """
@@ -892,6 +1023,92 @@ final class TOSPlayerViewModel: NSObject {
                     enumerable: false
                 });
             } catch(e) {}
+        })();
+        """
+
+    /// JavaScript injected at document-end into every frame. Arms only inside the
+    /// embed iframe (`window !== window.top`), where it listens for the wrapper's
+    /// `st-enter-fullscreen` message and puts the `<video>` into fullscreen.
+    ///
+    /// WHY postMessage: the video element is only reachable from its own document,
+    /// and frame-targeted `evaluateJavaScript(_:in: embedFrameInfo)` proved
+    /// unreliable for this (its completion never fires on iOS 26.4). The wrapper
+    /// page can always post a message to `iframe.contentWindow`, and this receiver
+    /// answers it in the document that owns the `<video>`.
+    ///
+    /// `webkitEnterFullscreen` is the iOS entry point YouTube itself uses; the
+    /// embedfs spike confirmed it exists in every configuration (`vfs=1`), while
+    /// `Element.prototype.requestFullscreen` is absent inside the cross-origin
+    /// iframe. Results are relayed over the ytCallback channel (type "fullscreen")
+    /// so the row's outcome is observable in the log and in UI tests.
+    private static let fullscreenReceiverJS: String = """
+        (function() {
+            if (window === window.top) return;   // embed iframe only
+            if (window.__stFsReceiver) return;
+            window.__stFsReceiver = true;
+
+            function report(payload) {
+                try {
+                    var cb = window.__nativeYTCallback;
+                    if (cb) cb.postMessage(JSON.stringify(payload));
+                } catch(e) {}
+            }
+
+            // Presentation listeners installed once: a
+            // "event-webkitbeginfullscreen" stage means the native fullscreen video
+            // player actually appeared.
+            ['webkitbeginfullscreen', 'webkitendfullscreen', 'fullscreenchange']
+                .forEach(function(n) {
+                    document.addEventListener(n, function() {
+                        report({
+                            type: 'fullscreen',
+                            stage: 'event-' + n,
+                            active: !!(document.fullscreenElement || document.webkitFullscreenElement)
+                        });
+                    }, true);
+                });
+
+            window.addEventListener('message', function(e) {
+                if (!e || e.data !== 'st-enter-fullscreen') return;
+                var v = document.querySelector('video');
+                if (!v) { report({ type: 'fullscreen', stage: 'no-video' }); return; }
+                if (v.webkitEnterFullscreen) {
+                    report({ type: 'fullscreen', stage: 'video-request', api: 'webkitEnterFullscreen' });
+                    try {
+                        v.webkitEnterFullscreen();
+                    } catch (err) {
+                        report({
+                            type: 'fullscreen',
+                            stage: 'video-error',
+                            error: (err && err.name) || 'threw'
+                        });
+                    }
+                    return;
+                }
+                if (v.requestFullscreen) {
+                    report({ type: 'fullscreen', stage: 'video-request', api: 'requestFullscreen' });
+                    try {
+                        var p = v.requestFullscreen();
+                        if (p && p.catch) {
+                            p.catch(function(err) {
+                                report({
+                                    type: 'fullscreen',
+                                    stage: 'video-error',
+                                    error: (err && err.name) || 'rejected'
+                                });
+                            });
+                        }
+                    } catch (err) {
+                        report({
+                            type: 'fullscreen',
+                            stage: 'video-error',
+                            error: (err && err.name) || 'threw'
+                        });
+                    }
+                    return;
+                }
+                report({ type: 'fullscreen', stage: 'no-api' });
+            }, false);
         })();
         """
 

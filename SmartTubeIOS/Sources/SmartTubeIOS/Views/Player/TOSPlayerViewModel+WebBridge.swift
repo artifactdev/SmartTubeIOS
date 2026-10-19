@@ -163,6 +163,9 @@ extension TOSPlayerViewModel {
                 "[ytCallback] 🔇 muteChange \(wasMuted, privacy: .public)→\(nowMuted, privacy: .public) at t=\(muteT, format: .fixed(precision: 2))s"
             )
 
+        case "fullscreen":
+            handleFullscreenMessage(json)
+
         case "pageHidden":
             tosLog.notice("[ytCallback] 📴 page hidden (app backgrounded)")
             CFNotificationCenterPostNotification(
@@ -404,6 +407,20 @@ extension TOSPlayerViewModel {
                 nil, nil, true
             )
         }
+    }
+
+    private func handleFullscreenMessage(_ json: [String: Any]) {
+        let stage = (json["stage"] as? String) ?? "unknown"
+        let active = (json["active"] as? Bool) ?? false
+        let error = (json["error"] as? String) ?? ""
+        tosLog.notice(
+            "[fullscreen] stage=\(stage, privacy: .public) active=\(active, privacy: .public) error=\(error, privacy: .public)"
+        )
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("com.void.smarttube.tosplayer.fullscreen.\(stage)" as CFString),
+            nil, nil, true
+        )
     }
 }
 

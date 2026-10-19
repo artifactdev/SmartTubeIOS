@@ -152,6 +152,7 @@ struct MainTabView: View {
     @Environment(PlayerRouter.self) private var playerRouter
     @Environment(BrowseViewModel.self) private var browseVM
     @State private var showSrcSwapSpike = false
+    @State private var showEmbedFsSpike = false
     #endif
 
     var body: some View {
@@ -313,9 +314,17 @@ struct MainTabView: View {
         .fullScreenCover(isPresented: $showSrcSwapSpike) {
             ShortsEmbedSrcSwapSpikeView()
         }
+        .fullScreenCover(isPresented: $showEmbedFsSpike) {
+            EmbedFullscreenSpikeView()
+        }
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("--uitesting-shorts-srcswap-spike") {
                 showSrcSwapSpike = true
+            }
+            if ProcessInfo.processInfo.arguments.contains(where: {
+                $0.hasPrefix("--uitesting-embed-fs-spike")
+            }) {
+                showEmbedFsSpike = true
             }
         }
         #endif
