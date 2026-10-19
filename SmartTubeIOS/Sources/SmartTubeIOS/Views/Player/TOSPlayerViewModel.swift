@@ -191,6 +191,11 @@ final class TOSPlayerViewModel: NSObject {
     /// Set by `TOSPlayerStateStore.play(video:api:)` via `setNavigationContext(hasPrevious:)`
     /// based on whether a navigation history exists.
     var hasPrevious: Bool = false
+    /// Number of videos in the Current Queue when this video was opened. Drives
+    /// the playlist-gated previous/next buttons (`canPlayPreviousVideo` /
+    /// `canPlayNextVideo`); 0 or 1 keeps them disabled. Refreshed by
+    /// `refreshPlaylistVideoCount()` after "ready".
+    var playlistVideoCount: Int = 0
     /// Wired by TOSPlayerView to `tosState.play(video:api:)` for the next related video.
     var onPlayNext: ((Video) -> Void)?
     /// Wired by TOSPlayerView to pop `TOSPlayerStateStore.history` and re-play it.
@@ -361,7 +366,11 @@ final class TOSPlayerViewModel: NSObject {
         // CRITICAL on iOS: without this, YouTube's embed hijacks the native system
         // video player when the user taps play, taking control away from the WKWebView.
         config.allowsInlineMediaPlayback = true
-        config.allowsAirPlayForMediaPlayback = true
+        // AirPlay is deliberately disabled app-wide: routing the TOS embed to an
+        // AirPlay receiver left the video off-screen and capped quality. Users
+        // who want a TV use the in-page fullscreen control (native PiP/AirPlay
+        // inside the system player) instead of an in-app route picker.
+        config.allowsAirPlayForMediaPlayback = false
         // Explicit (default may vary across iOS versions) — required for the native
         // PiP button to appear in the embedded <video>'s controls. Investigated as
         // part of #283 (background play/PiP support); does not by itself enable PiP

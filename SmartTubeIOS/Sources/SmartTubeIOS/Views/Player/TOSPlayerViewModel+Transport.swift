@@ -24,6 +24,38 @@ extension TOSPlayerViewModel {
         chapters.last(where: { $0.startTime <= currentTime })
     }
 
+    /// True when a chapter starts after the current playhead — enables the
+    /// "next chapter" transport button.
+    var hasNextChapter: Bool {
+        TOSPlayerTransportSupport.nextChapterStart(in: chapters, after: currentTime) != nil
+    }
+
+    /// True when the playhead can move backward to a chapter boundary — either
+    /// the start of the current chapter (>3 s in) or the previous one.
+    var hasPreviousChapter: Bool {
+        TOSPlayerTransportSupport.previousChapterStart(in: chapters, currentTime: currentTime) != nil
+    }
+
+    /// Seeks to the start of the next chapter (no-op at the last chapter).
+    func skipToNextChapter() {
+        guard let target = TOSPlayerTransportSupport.nextChapterStart(in: chapters, after: currentTime) else {
+            return
+        }
+        transportLog.notice("[chapter] skip next → \(target, format: .fixed(precision: 1))s")
+        seekTo(target)
+    }
+
+    /// Restarts the current chapter when >3 s into it, otherwise seeks to the
+    /// start of the previous chapter (no-op at the first chapter).
+    func skipToPreviousChapter() {
+        guard
+            let target = TOSPlayerTransportSupport.previousChapterStart(
+                in: chapters, currentTime: currentTime)
+        else { return }
+        transportLog.notice("[chapter] skip previous → \(target, format: .fixed(precision: 1))s")
+        seekTo(target)
+    }
+
     // MARK: Play / pause
 
     func togglePlayPause() {

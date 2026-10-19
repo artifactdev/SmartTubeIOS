@@ -3,6 +3,7 @@ import Foundation
 import Testing
 
 @testable import SmartTubeIOS
+import SmartTubeIOSCore
 
 // MARK: - TOSPlayerTransportSupportTests
 //
@@ -145,6 +146,79 @@ struct TOSPlayerTransportQualityTests {
             TOSPlayerTransportSupport.audioTrackDisplayName(
                 provided: "Deutsch", languageCode: "de", identifier: "de.2", index: 1)
                 == "Deutsch")
+    }
+}
+
+// MARK: - Chapter navigation
+
+@Suite("TOSPlayerTransportSupport chapter navigation")
+struct TOSPlayerTransportChapterTests {
+
+    private let chapters = [
+        Chapter(title: "Intro", startTime: 0),
+        Chapter(title: "Main", startTime: 90),
+        Chapter(title: "End", startTime: 300),
+    ]
+
+    @Test("next chapter start is the first chapter after the playhead")
+    func nextChapter() {
+        #expect(TOSPlayerTransportSupport.nextChapterStart(in: chapters, after: 0) == 90)
+        #expect(TOSPlayerTransportSupport.nextChapterStart(in: chapters, after: 120) == 300)
+        #expect(TOSPlayerTransportSupport.nextChapterStart(in: chapters, after: 300) == nil)
+        #expect(TOSPlayerTransportSupport.nextChapterStart(in: [], after: 0) == nil)
+    }
+
+    @Test("previous chapter restarts the current one once >3s in")
+    func previousChapterRestarts() {
+        // 10s into the chapter starting at 0 → restart it.
+        #expect(TOSPlayerTransportSupport.previousChapterStart(in: chapters, currentTime: 10) == 0)
+        // 100s into the chapter starting at 90 → restart 90.
+        #expect(TOSPlayerTransportSupport.previousChapterStart(in: chapters, currentTime: 100) == 90)
+    }
+
+    @Test("previous chapter jumps back within the first 3s of a chapter")
+    func previousChapterJumpsBack() {
+        // 1s into the chapter starting at 90 → previous chapter (0).
+        #expect(TOSPlayerTransportSupport.previousChapterStart(in: chapters, currentTime: 91) == 0)
+    }
+
+    @Test("previous chapter is nil at the first chapter's start")
+    func previousChapterAtStart() {
+        #expect(TOSPlayerTransportSupport.previousChapterStart(in: chapters, currentTime: 1) == nil)
+        #expect(TOSPlayerTransportSupport.previousChapterStart(in: [], currentTime: 5) == nil)
+    }
+}
+
+// MARK: - Playlist gating
+
+@Suite("TOSPlayerTransportSupport playlist gating")
+struct TOSPlayerTransportPlaylistTests {
+
+    @Test("non-playlist videos cannot navigate")
+    func nonPlaylistDisabled() {
+        #expect(
+            TOSPlayerTransportSupport.canNavigatePlaylist(
+                playlistId: nil, queuePlaylistID: "__queue__", queueCount: 5) == false)
+        #expect(
+            TOSPlayerTransportSupport.canNavigatePlaylist(
+                playlistId: "PLother", queuePlaylistID: "__queue__", queueCount: 5) == false)
+    }
+
+    @Test("a one-item queue keeps both buttons disabled")
+    func singleItemQueue() {
+        #expect(
+            TOSPlayerTransportSupport.canNavigatePlaylist(
+                playlistId: "__queue__", queuePlaylistID: "__queue__", queueCount: 1) == false)
+        #expect(
+            TOSPlayerTransportSupport.canNavigatePlaylist(
+                playlistId: "__queue__", queuePlaylistID: "__queue__", queueCount: 0) == false)
+    }
+
+    @Test("a multi-item queue enables navigation")
+    func multiItemQueue() {
+        #expect(
+            TOSPlayerTransportSupport.canNavigatePlaylist(
+                playlistId: "__queue__", queuePlaylistID: "__queue__", queueCount: 2) == true)
     }
 }
 #endif

@@ -66,6 +66,19 @@ captions module is not reliable). Unsupported options are hidden or disabled.
 toggles captions (long-press opens the language picker); the more menu's
 Captions row opens the same picker for track/language selection. See ADR-0010.
 
+The bottom transport row mirrors the direct player: previous/next video buttons
+that appear only for playlist-sourced videos (Current Queue with more than one
+item) and always-present previous/next chapter jump buttons (disabled without
+chapters or at the boundary; "previous" restarts the current chapter once >3 s
+in). `TOSPlayerTransportSupport` holds the pure chapter/playlist predicates.
+
+**Volume indicator** — the full-screen player embeds a hidden `MPVolumeView`
+(`SystemVolumeControl`) to drive system volume from the edge-swipe gesture; a
+side effect is that iOS suppresses its own volume HUD. `SystemVolumeMonitor`
+(KVO on `AVAudioSession.outputVolume`, iOS-only) therefore drives the shared
+`GestureAdjustmentHUD` for hardware-key / Control Center / route volume changes,
+shown while the full-screen player is on screen.
+
 **Ads** — the app does not hide or skip ads. If `#movie_player` has
 `ad-showing`, `TOSPlayerChromeJS` disables the hider so YouTube's ad UI and
 Skip Ad remain usable, and the native overlay yields.

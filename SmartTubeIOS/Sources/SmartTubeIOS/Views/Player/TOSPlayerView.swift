@@ -93,6 +93,9 @@ public struct TOSPlayerView: View {
     /// rather than immediately, so the final value is visible for a moment.
     @State private var gestureHUD: GestureAdjustmentInfo?
     @State private var hudDismissTask: Task<Void, Never>?
+    /// Shows the volume HUD for hardware volume-key presses (iOS suppresses its
+    /// own system HUD while `SystemVolumeControl`'s MPVolumeView is mounted).
+    @State private var volumeMonitor = SystemVolumeMonitor()
     #endif
 
     #if os(iOS)
@@ -326,7 +329,14 @@ public struct TOSPlayerView: View {
                     .accessibilityHidden(true)
 
                     // MARK: Brightness/volume adjustment HUD (#19)
-                    if let gestureHUD {
+                    // The volume monitor (hardware keys) takes priority while it
+                    // is visible; otherwise show the drag-driven gesture HUD.
+                    if let volumeLevel = volumeMonitor.level {
+                        GestureAdjustmentHUD(
+                            info: GestureAdjustmentInfo(kind: .volume, value: volumeLevel)
+                        )
+                        .transition(.opacity)
+                    } else if let gestureHUD {
                         GestureAdjustmentHUD(info: gestureHUD)
                             .transition(.opacity)
                     }
@@ -470,6 +480,9 @@ public struct TOSPlayerView: View {
                 let physicallyLandscape = UIDevice.current.orientation.isLandscape
                 OrientationManager.shared.playerIsActive =
                     isLandscapeLocked || store.settings.landscapeAlwaysPlay || physicallyLandscape
+                // Hardware-key volume changes have no notification — KVO on
+                // outputVolume is the only signal (see SystemVolumeMonitor).
+                volumeMonitor.start()
                 #endif
             }
             // Pause the embedded <video> element when this view leaves the hierarchy.
@@ -490,6 +503,7 @@ public struct TOSPlayerView: View {
             .onDisappear {
                 #if os(iOS)
                 controlsHideTask?.cancel()
+                volumeMonitor.stop()
                 UIDevice.current.endGeneratingDeviceOrientationNotifications()
                 OrientationManager.shared.playerIsActive = false
                 // On iOS, only pause when fully stopped — not when minimizing to mini-player.

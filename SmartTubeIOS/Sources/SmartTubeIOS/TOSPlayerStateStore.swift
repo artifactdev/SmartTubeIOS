@@ -195,6 +195,12 @@ public final class TOSPlayerStateStore {
             startTime: 0, isIncognito: incognito, api: api)
         newVM.seenVideoIds = seenVideoIds
         newVM.setNavigationContext(hasPrevious: !history.isEmpty)
+        // Seed the playlist-gated previous/next buttons. The queue is an actor,
+        // so read its length off the main actor; `refreshPlaylistVideoCount()`
+        // is re-run after "ready" in case the queue changed meanwhile.
+        Task { @MainActor [weak newVM] in
+            await newVM?.refreshPlaylistVideoCount()
+        }
         // Wire swipe-navigation callbacks here (not in TOSPlayerView.onAppear) so
         // every vm created by a swipe-driven play() — not just the first — gets
         // working onPlayNext/onPlayPrevious. SwiftUI's .onAppear fires once per
